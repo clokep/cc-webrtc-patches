@@ -1,6 +1,7 @@
 # HG changeset patch
-# User Nihanth Subramanya <nhnt11@gmail.com>
-# Date 1413402118 14400
+# Parent b27ed4a36f60e1af675415fa5abb2ff55f2534a0
+# User Patrick Cloke <clokep@gmail.com>
+# Date 1413406079 14400
 #      Wed Oct 15 15:41:58 2014 -0400
 Bug 1018060: Implement voice call support in Instantbird using webRTC, UI part.
 
@@ -331,7 +332,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
              return;
  
            let account = this._conv.account;
-@@ -1732,22 +1996,55 @@
+@@ -1732,22 +1996,59 @@
              cti.setAttribute("statusMessage", statusString + statusText);
              cti.setAttribute("status", Status.toAttribute(statusType));
              cti.setAttribute("statusTypeTooltiptext", statusString);
@@ -349,10 +350,14 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +                                .querySelector(".videoCallButton");
 +
 +
-+          if (videoCallButton && this._conv.account.protocol.id != "prpl-jabber") {
++          if (videoCallButton &&
++              (this._conv.account.protocol.id != "prpl-jabber" ||
++               this._conv.account.protocol.id != "prpl-gtalk")) {
 +            videoCallButton.remove();
 +          }
-+          if (!videoCallButton && this._conv.account.protocol.id == "prpl-jabber") {
++          if (!videoCallButton &&
++              (this._conv.account.protocol.id != "prpl-jabber" ||
++               this._conv.account.protocol.id != "prpl-gtalk")) {
 +            let videoCallButton = document.createElement("toolbarbutton");
 +            videoCallButton.classList.add("videoCallButton");
 +            videoCallButton.setAttribute("tooltiptext",
@@ -388,7 +393,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
            targetSwitcher.setAttribute("image",
                                        account.protocol.iconBaseURI + "icon.png");
            let targetTooltip =
-@@ -1755,16 +2052,17 @@
+@@ -1755,16 +2056,17 @@
                                               [this._conv.title,
                                                account.name,
                                                account.protocol.name], 3);
@@ -406,7 +411,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
              this.tab.setAttribute("chat", "true");
              this.tab.setAttribute("prpl", this._conv.account.protocol.id);
  
-@@ -1852,16 +2150,17 @@
+@@ -1852,16 +2154,17 @@
              break;
  
            case "replying-to-prompt":
@@ -424,7 +429,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
            case "update-buddy-icon":
            case "update-conv-chatleft":
            case "update-conv-chatjoining":
-@@ -1892,16 +2191,30 @@
+@@ -1892,16 +2195,30 @@
              this.updateTopic();
              break;
  
@@ -697,7 +702,7 @@ diff --git a/im/themes/jar.mn b/im/themes/jar.mn
  	skin/classic/aero/instantbird/preferences/applications.css   (preferences-winstripe/applications.css)
 diff --git a/im/themes/webRTC-sharingDevice-16.png b/im/themes/webRTC-sharingDevice-16.png
 new file mode 100644
-index 0000000000000000000000000000000000000000..a670676a01b7b46e4b2556c4e98542e821d3f047
+index e69de29bb2d1d6434b8b29ae775ad8c2e48c5391..a670676a01b7b46e4b2556c4e98542e821d3f047
 GIT binary patch
 literal 404
 zc$@*00c-w=P)<h;3K|Lk000e1NJLTq000mG000mO1^@s6AM^iV00047Nkl<Zc-p0s
@@ -711,7 +716,7 @@ y6P|OEwd4RfVU^`D!>panVuwc2WR+8qTJQ@#3j%MMTlFOX0000<MNUMnLSTXuc(MHe
 
 diff --git a/im/themes/webRTC-sharingDevice-16@2x.png b/im/themes/webRTC-sharingDevice-16@2x.png
 new file mode 100644
-index 0000000000000000000000000000000000000000..93fe47d03998fa07181aa50297115dab659697f8
+index e69de29bb2d1d6434b8b29ae775ad8c2e48c5391..93fe47d03998fa07181aa50297115dab659697f8
 GIT binary patch
 literal 716
 zc$@*u0yF)IP)<h;3K|Lk000e1NJLTq001BW001Be1^@s6b9#F80007$Nkl<Zc-rlk
