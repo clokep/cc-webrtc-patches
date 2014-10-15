@@ -1,6 +1,7 @@
 # HG changeset patch
-# User Mayank Kumar <mayanktg@gmail.com>
-# Date 1413402034 14400
+# Parent 2a99fdb46c1feac1de1c01d879a6244351904e45
+# User Patrick Cloke <clokep@gmail.com>
+# Date 1413406089 14400
 #      Wed Oct 15 15:40:34 2014 -0400
 Bug 1018060: Implement voice call support in Instantbird using webRTC.
 
@@ -527,7 +528,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
                                     "@mozilla.org/uuid-generator;1",
                                     "nsIUUIDGenerator");
 +XPCOMUtils.defineLazyModuleGetter(this, "Jingle",
-+  "resource://gre/modules/xmpp-jingle.jsm");
++  "resource:///modules/xmpp-jingle.jsm");
  
  XPCOMUtils.defineLazyGetter(this, "_", function()
    l10nHelper("chrome://chat/locale/xmpp.properties")
