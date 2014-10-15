@@ -1,0 +1,650 @@
+# HG changeset patch
+# User Mayank Kumar <mayanktg@gmail.com>
+# Date 1413402034 14400
+#      Wed Oct 15 15:40:34 2014 -0400
+Bug 1018060: Implement voice call support in Instantbird using webRTC.
+
+diff --git a/chat/components/public/prplIConversation.idl b/chat/components/public/prplIConversation.idl
+--- a/chat/components/public/prplIConversation.idl
++++ b/chat/components/public/prplIConversation.idl
+@@ -69,19 +69,25 @@ interface prplIConversation: nsISupports
+   /* Method to add or remove an observer */
+   void addObserver(in nsIObserver aObserver);
+   void removeObserver(in nsIObserver aObserver);
+ 
+   /* Observers will be all receive new-text notifications.
+      aSubject will contain the message (prplIMessage) */
+ };
+ 
+-[scriptable, uuid(0c072a80-103a-4992-b249-8e442b5f0d46)]
++[scriptable, uuid(c3a50563-9090-413f-933f-441e9615f585)]
+ interface prplIConvIM: prplIConversation {
+ 
++  /* Send a SDP offer/answer when user makes/answers a video call */
++  void webrtcCall(in AUTF8String aType, in AUTF8String aOffer);
++
++  /* Terminate a video call */
++  void endCall();
++
+   /* The buddy at the remote end of the conversation */
+   readonly attribute imIAccountBuddy buddy;
+ 
+   /* The remote buddy is not currently typing */
+   const short NOT_TYPING = 0;
+ 
+   /* The remote buddy is currently typing */
+   const short TYPING = 1;
+diff --git a/chat/components/src/imConversations.js b/chat/components/src/imConversations.js
+--- a/chat/components/src/imConversations.js
++++ b/chat/components/src/imConversations.js
+@@ -430,16 +430,18 @@ UIConversation.prototype = {
+       }
+     }
+   },
+ 
+   // prplIConvIM
+   get buddy() this.target.buddy,
+   get typingState() this.target.typingState,
+   sendTyping: function(aString) this.target.sendTyping(aString),
++  webrtcCall: function(aType, aOffer) this.target.webrtcCall(aType, aOffer),
++  endCall: function() this.target.endCall(),
+ 
+   // Chat only
+   getParticipants: function() this.target.getParticipants(),
+   get topic() this.target.topic,
+   set topic(aTopic) { this.target.topic = aTopic; },
+   get topicSetter() this.target.topicSetter,
+   get topicSettable() this.target.topicSettable,
+   get noTopicString() bundle.GetStringFromName("noTopic"),
+diff --git a/chat/modules/jsProtoHelper.jsm b/chat/modules/jsProtoHelper.jsm
+--- a/chat/modules/jsProtoHelper.jsm
++++ b/chat/modules/jsProtoHelper.jsm
+@@ -518,16 +518,19 @@ const GenericConvIMPrototype = {
+ 
+     if (aState == Ci.prplIConvIM.NOT_TYPING)
+       delete this.typingState;
+     else
+       this.typingState = aState;
+     this.notifyObservers(null, "update-typing", null);
+   },
+ 
++  webrtcCall: function(aType, aOffer) { throw Cr.NS_ERROR_NOT_IMPLEMENTED; },
++  endCall: function() { throw Cr.NS_ERROR_NOT_IMPLEMENTED; },
++
+   get isChat() false,
+   buddy: null,
+   typingState: Ci.prplIConvIM.NOT_TYPING
+ };
+ 
+ const GenericConvChatPrototype = {
+   __proto__: GenericConversationPrototype,
+   _interfaces: [Ci.prplIConversation, Ci.prplIConvChat],
+diff --git a/chat/protocols/xmpp/moz.build b/chat/protocols/xmpp/moz.build
+--- a/chat/protocols/xmpp/moz.build
++++ b/chat/protocols/xmpp/moz.build
+@@ -5,14 +5,15 @@
+ 
+ EXTRA_COMPONENTS += [
+     'xmpp.js',
+     'xmpp.manifest',
+ ]
+ 
+ EXTRA_JS_MODULES += [
+     'xmpp-authmechs.jsm',
++    'xmpp-jingle.jsm',
+     'xmpp-session.jsm',
+     'xmpp-xml.jsm',
+     'xmpp.jsm',
+ ]
+ 
+ JAR_MANIFESTS += ['jar.mn']
+diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jingle.jsm
+new file mode 100644
+--- /dev/null
++++ b/chat/protocols/xmpp/xmpp-jingle.jsm
+@@ -0,0 +1,381 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++const EXPORTED_SYMBOLS = ["Jingle"];
++
++Components.utils.import("resource:///modules/xmpp-xml.jsm");
++
++const Jingle = {
++  sdp2xml: function sdp2xml(aOffer) {
++    // NOTE: The SDP offer folows the RFC-4566: Session Description Protocol.
++    // Using XEP-0320: Jingle RTP Session.
++
++    // This is the output variable which contains the array of content node to
++    // be sent with Jingle stanza.
++    let contentNodes = [];
++
++    // SDP session description consists of a session-level section followed by
++    // zero or more media-level sections.
++    let sessionDesc = aOffer.split("m=");
++
++    /* "ice-ufrag" and "ice-pwd" attributes convey the username fragment and
++     * password used by ICE for message integrity. See RFC 5245, Section 15.4.
++     * e.g. [a=ice-ufrag:0c838e8e]
++     */
++    let ufrag;
++    // eg. [a=ice-pwd:1ef8fe1ef670d3dd89098b03dac4b4ed]
++    let pwd;
++    /* The fingerprint is the result of a hash function of the certificates
++     * used in the DTLS-SRTP negotiation. This line creates a binding between
++     * the signaling and the certificates used in DTLS.
++     * e.g. [a=fingerprint:sha-256 2B:6E:6A:8D:...]
++     */
++    let shaHash;
++    let fingerprintData;
++
++    // The session-level section contains the version, user name, type of call,
++    // timestamp, ufrag, password, fingerprint and other attributes.
++    let headerLines = sessionDesc[0].split("\r\n");
++    for (let header of headerLines) {
++      let params = header.split(":");
++
++      // It is the ufrag attribute of transport node.
++      if (params[0] == "a=ice-ufrag")
++        ufrag = params[1];
++      // It is the pwd attribute of the transport node.
++      else if (params[0] == "a=ice-pwd")
++        pwd = params[1];
++      // It gets the fingerprint data and sha hash information of the
++      // fingerprint node.
++      else if (params[0] == "a=fingerprint") {
++        shaHash = params[1].split(" ")[0];
++        fingerprintData = header.split(" ")[1];
++      }
++    }
++
++    // If the session descrription lacks session-level section's information the
++    // media-level section shouldn't be parsed.
++    if (!(ufrag && pwd && shaHash && fingerprintData))
++      return;
++
++    /* Divide the media type audio/video into set of groups containing the
++     * payload and candidate information of the respective media found. The
++     * sessionDesc array now contains only the media-level section elements.
++     */
++    sessionDesc.shift();
++
++    // For each media a content node containing description and transport child
++    // node is to be created.
++    for (let medium of sessionDesc) {
++      let mediaLines = medium.split("\r\n");
++      let mediaName = mediaLines[0].split(" ")[0];
++
++      // Set the name attribute of content node.
++      let nameAttr;
++      if (mediaName == "audio")
++        nameAttr = "voice";
++      else if (mediaName == "video")
++        nameAttr = "face";
++      // Do not send the content node if the m=… contains media name other than
++      // audio or video.
++      else
++        continue;
++
++      // Content node is added to content.
++      let content = Stanza.node("content", null,
++                                {creator: "initiator",
++                                 name: nameAttr});
++
++      // Setup attribute of description node. Every media-level description
++      // contains a=setup field whose value is set as the setup attribute.
++      let setupAttr = medium.match(/(a=setup)[\S]*/)[0].split(":")[1];
++      // Set attributes for the description node.
++      let description = Stanza.node("description", null,
++                                    {xmlns: Stanza.NS.jingle_apps_rtp,
++                                     // Sets media as audio or video.
++                                     media: mediaName,
++                                     // setup=actpass / active / passive.
++                                     setup: setupAttr});
++      content.addChild(description);
++
++      // Transport element is a child of content node. It contains fingerprint
++      // and candidate nodes.
++      let transport = Stanza.node("transport", null,
++                                  {xmlns: Stanza.NS.jingle_transport_ice_udp,
++                                   ufrag: ufrag,
++                                   pwd: pwd});
++      content.addChild(transport);
++
++      // Fingerprint element.
++      let fingerprint = Stanza.node("fingerprint", null,
++                                    {xmlns: Stanza.NS.jingle_apps_dtls,
++                                     hash: shaHash},
++                                    // Fingerprint data.
++                                    fingerprintData);
++      transport.addChild(fingerprint);
++
++      let payloads = [];
++
++      for (let mediaField of mediaLines) {
++        let params = mediaField.split(" ");
++        let pNode = params[0].split(":");
++
++        /* XEP: 2094 Jingle RTP Header Extensions Negotiation. It defines
++         * backward-compatible and extensible means to carry multiple header
++         * extension elements in a single RTP packet. This header extension
++         * applies to RTP/AVP (Audio/Visual Profile) and its extensions.
++         * e.g. [ a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level].
++         * Here 1 is the local ID and the next is URI for the extension.
++         * It is to be mapped with the rtp-hdrext node.
++         */
++        if (pNode[0] == "a=extmap") {
++          description
++            .addChild(Stanza.node("rtp-hdrext", null,
++                                  {xmlns: Stanza.NS.jingle_apps_rtp_hdrext,
++                                   id: pNode[1],
++                                   uri: params[1]}));
++        }
++        /* Payload-type node is child of description node. This attribute
++         * maps from an RTP payload type number (as used in an "m=" line)
++         * to an encoding name denoting the payload format to be used.
++         * e.g. [a=rtpmap:8 PCMA/8000/2]
++         */
++        else if (pNode[0] == "a=rtpmap") {
++          let payloadAttr = params[1].split("/");
++          // If channel information is missing in the payload type pass
++          // without channel attribute.
++          let attr = {id: pNode[1], name: payloadAttr[0],
++                      clockrate: payloadAttr[1]};
++          if (payloadAttr.length >= 3)
++            attr.channels = payloadAttr[2];
++
++          payloads.push(Stanza.node("payload-type", null, attr));
++        }
++        /* The ping time information if present should be added as the child
++         * of payload-type. This gives the length of time in milliseconds
++         * represented by the media in a packet. Since a=ptime appears just
++         * above concerned payload-type we add it as children to the payload
++         * node created just before.
++         */
++        else if (pNode[0] == "a=ptime") {
++          let parameter = Stanza.node("parameter", null,
++                                      {ptime: pNode[1]});
++          payloads[payloads.length - 1].addChild(parameter);
++        }
++        /* a=fmtp field allows parameters that are specific to a particular
++         * format to be conveyed in a way that SDP does not have to understand
++         * them. This is added in same manner as a=ptime.
++         */
++        else if (pNode[0] == "a=fmtp") {
++          let parameter = Stanza.node("parameter", null,
++                                      {value: params[1]});
++          payloads[payloads.length - 1].addChild(parameter);
++        }
++        /* XEP: 2093 Jingle RTP Feedback Negotiation. It is uses a modified
++         * RTP profile for audio and video conferences with minimal control
++         * to acieve timely feedback.
++         * e.g. [a=rtcp-fb:98 nack rpsi]
++         * Here rtcp-fb is inserted in the payload-type node with the id 98.
++         * It contains the type "nack" and subtype "rpsi".
++         */
++        else if (pNode[0] == "a=rtcp-fb") {
++          let attr = {xmlns: Stanza.NS.jingle_apps_rtcp_fb, type: params[1]};
++          if (params.length >= 3)
++            attr.subtype = params[2];
++
++          payloads[payloads.length - 1]
++            .addChild(Stanza.node("rtcp-fb", null, attr));
++        }
++        /* Candidate nodes are added as child of the transport node. It is
++         * explained in RFC-5245: Interactive Connectivity Establishment(ICE).
++         * e.g. [a=candidate:3 2 UDP 1686044670 106.51.45.18 43127 typ host]
++         */
++        else if (pNode[0] == "a=candidate") {
++          let attr = {component: pNode[1], foundation: params[1],
++                      protocol: params[2], priority: params[3], ip: params[4],
++                      port: params[5], type: params[7]};
++          if (params.length >= 9) {
++            attr.reladdr = params[9];
++            attr.relport = params[11];
++          }
++
++          transport.addChild(Stanza.node("candidate", null, attr));
++        }
++      }
++
++      // Add the payload nodes as children to the description node.
++      payloads.forEach(function(aPayload) description.addChild(aPayload));
++      contentNodes.push(content);
++    }
++
++    return contentNodes;
++  },
++
++  xml2sdp: function xml2sdp(aXmlOffer) {
++    if (aXmlOffer.length === 0)
++      return;
++
++    let sdp = [];
++    let nodeContent = [];
++
++    /* Complete SDP session-level description should be generated. Since there
++     * is no mention in the XEPs about how to pass v=, o=, s= and t= fields in
++     * form of XML stanzas we have given a constant value to each of these
++     * fields. Note that these value don't affect the call being made.
++     */
++    let header = ["v=0",
++                  "o=Mozilla-SIPUA 0 0 IN IP4 0.0.0.0",
++                  "s=SIP Call",
++                  "t=0 0"];
++    sdp.push(header.join("\r\n"));
++
++    // Transport node contains ufrag, pwd, fingerprint.
++    let eleTransport = aXmlOffer[0].getElement(["transport"]);
++    let eleFingerprint = eleTransport.getElement(["fingerprint"]);
++
++    sdp.push("a=ice-ufrag:" + eleTransport.attributes["ufrag"]);
++    sdp.push("a=ice-pwd:" + eleTransport.attributes["pwd"]);
++
++    if (eleFingerprint) {
++      sdp.push("a=fingerprint:" + eleFingerprint.attributes["hash"]  + " " +
++               eleFingerprint.innerText);
++    }
++
++    /* The content node is used to form the media element of the offer.
++     * i.e. It contains m=, c=, a=rtpmap, a=candidate and other atrributes
++     * which defines how that media voice/video would be mapped.
++     */
++    for (let cNode of aXmlOffer) {
++      let media = [];
++      // Media is of the form [m=video 33680 RTP/SAVPF 120].
++      let descData = cNode.getElement(["description"]);
++      media.push(("m=" + descData.attributes["media"]));
++
++      // Connection element (IP is first IP of candidate).
++      // e.g. [c=IN IP4 106.51.45.18]
++      let firstCandidateData = cNode.getElement(["transport"])
++                                    .getElement(["candidate"]);
++
++      // The port attribute of first candidate is used if no relport exist. Else
++      // use the first relport found in other candidate of the media.
++      media.push(firstCandidateData.attributes["port"], "RTP/SAVPF");
++
++      let connection = "c=IN ";
++      let IP = firstCandidateData.attributes["ip"];
++      if (IP.contains(":"))
++        connection += "IP6 " + IP;
++      else
++        connection += "IP4 " + IP;
++      nodeContent.push(connection);
++
++      // The c=IN... line must be added just below the m=… line. indexConnection
++      // stores the index of last occurence of c=... element in the SDP offer.
++      let indexConnection = nodeContent.lastIndexOf(connection);
++
++      // Payload element [a=rtpmap:8 PCMA/8000].
++      let payloadData = descData.getElements(["payload-type"]);
++      let payload;
++      let indexSendrecv;
++      for (let pNode of payloadData) {
++        payload = "a=rtpmap:" + pNode.attributes["id"] + " " +
++                  pNode.attributes["name"] + "/" + pNode.attributes["clockrate"];
++        if (pNode.attributes["channels"])
++          payload += "/" + pNode.attributes["channels"];
++
++        // Push payload-type ID to media.
++        media.push(pNode.attributes["id"]);
++
++        nodeContent.push(payload);
++        indexSendrecv = nodeContent.lastIndexOf(payload);
++
++        if (pNode.getElement(["parameter"])) {
++          let parameter = pNode.getElement(["parameter"]);
++
++          // Ping element.
++          if (parameter.attributes["ptime"]) {
++            nodeContent.push("a=ptime:" + parameter.attributes["ptime"]);
++            indexSendrecv = nodeContent.length;
++          }
++          // Additional parameter to be added if specified.
++          else if (parameter.attributes["value"]) {
++            nodeContent.push("a=fmtp:" + pNode.attributes["id"] + " " +
++                             parameter.attributes["value"]);
++            indexSendrecv = nodeContent.length;
++          }
++        }
++
++        /* rtcp-fb element defined in XEP: 2093 Jingle RTP Feedback Negotiation
++         * uses a modified  RTP profile for audio and video conferences with
++         * minimal control to acieve timely feedback.
++         */
++        let rtcpfbData = pNode.getElements(["rtcp-fb"]);
++        if (rtcpfbData) {
++          for (let rNode of rtcpfbData) {
++            let rtcpfb = "a=rtcp-fb:" + pNode.attributes["id"] + " " +
++                         rNode.attributes["type"];
++            if (rNode.attributes["subtype"])
++              rtcpfb += " " + rNode.attributes["subtype"];
++
++            nodeContent.push(rtcpfb);
++          }
++        }
++      }
++      // Push a=sendrecv just after the last payload type element.
++      nodeContent.splice(indexSendrecv + 1, 0, "a=sendrecv");
++
++      // rtp-hdrext element.
++      // e.g. [a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level].
++      let rtpContent = descData.getElement(["rtp-hdrext"]);
++
++      if (rtpContent) {
++        let rtphdrext = "a=extmap:" + rtpContent.attributes["id"]  + " " +
++                        rtpContent.attributes["uri"];
++
++        nodeContent.push(rtphdrext);
++      }
++
++      // Setup attribute of description [a=setup:actpass].
++      if (descData.attributes["setup"])
++        nodeContent.push("a=setup:" + descData.attributes["setup"]);
++
++      // Candidate elements.
++      // e.g. [a=candidate:0 1 UDP 2122252543 106.51.45.18 60055 typ host].
++      let candidateData = cNode.getElement(["transport"])
++                               .getElements(["candidate"]);
++      let relport = [];
++
++      for (let candNode of candidateData) {
++        let candidate = "a=candidate:" + candNode.attributes["component"] + " " +
++                        candNode.attributes["foundation"] + " " +
++                        candNode.attributes["protocol"] + " " +
++                        candNode.attributes["priority"] + " " +
++                        candNode.attributes["ip"] + " " +
++                        candNode.attributes["port"] +
++                        " typ " + candNode.attributes["type"];
++        if (candNode.attributes["relport"]) {
++          candidate += " raddr " + candNode.attributes["reladdr"] +
++                       " rport " + candNode.attributes["relport"];
++          // Store the values of relport so that if relport exist the
++          // media[1] could be replaced with relport[0].
++          relport.push(candNode.attributes["relport"]);
++        }
++
++        if (relport[0])
++          media[1] = relport[0];
++
++        nodeContent.push(candidate);
++      }
++
++      // This is used to construct the m=… line of the SDP offer. It puts the
++      // media line constructed just above the c=… line.
++      nodeContent.splice(indexConnection, 0, media.join(" "));
++      // Taking [a=rtcp-mux] as default. Suitable XML element is not defined.
++      // Most of the devices have rtcp-mux in their offer.
++      nodeContent.push("a=rtcp-mux");
++    }
++
++    sdp.push(nodeContent.join("\r\n"));
++    return sdp.join("\r\n");
++  }
++};
+diff --git a/chat/protocols/xmpp/xmpp-xml.jsm b/chat/protocols/xmpp/xmpp-xml.jsm
+--- a/chat/protocols/xmpp/xmpp-xml.jsm
++++ b/chat/protocols/xmpp/xmpp-xml.jsm
+@@ -65,17 +65,25 @@ const NS = {
+   nick_notify               : "http://jabber.org/protocol/nick+notify",
+   activity                  : "http://jabber.org/protocol/activity",
+   last                      : "jabber:iq:last",
+   avatar_data               : "urn:xmpp:avatar:data",
+   avatar_data_notify        : "urn:xmpp:avatar:data+notify",
+   avatar_metadata           : "urn:xmpp:avatar:metadata",
+   avatar_metadata_notify    : "urn:xmpp:avatar:metadata+notify",
+   pubsub                    : "http://jabber.org/protocol/pubsub",
+-  pubsub_event              : "http://jabber.org/protocol/pubsub#event"
++  pubsub_event              : "http://jabber.org/protocol/pubsub#event",
++
++  // Jingle elements.
++  jingle_apps_rtcp_fb       : "urn:xmpp:jingle:apps:rtp:rtcp-fb:0",
++  jingle_apps_rtp_hdrext    : "urn:xmpp:jingle:apps:rtp:rtp-hdrext:0",
++  jingle                    : "urn:xmpp:jingle:1",
++  jingle_apps_rtp           : "urn:xmpp:jingle:apps:rtp:1",
++  jingle_transport_ice_udp  : "urn:xmpp:jingle:transports:ice-udp:1",
++  jingle_apps_dtls          : "urn:xmpp:jingle:apps:dtls:0"
+ };
+ 
+ var TOP_LEVEL_ELEMENTS = {
+   "message"             : "jabber:client",
+   "presence"            : "jabber:client",
+   "iq"                  : "jabber:client",
+   "stream:features"     : "http://etherx.jabber.org/streams",
+   "proceed"             : "urn:ietf:params:xml:ns:xmpp-tls",
+diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
+--- a/chat/protocols/xmpp/xmpp.jsm
++++ b/chat/protocols/xmpp/xmpp.jsm
+@@ -27,16 +27,18 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+   "resource://gre/modules/NetUtil.jsm");
+ XPCOMUtils.defineLazyServiceGetter(this, "imgTools",
+                                    "@mozilla.org/image/tools;1",
+                                    "imgITools");
+ XPCOMUtils.defineLazyServiceGetter(this, "UuidGenerator",
+                                    "@mozilla.org/uuid-generator;1",
+                                    "nsIUUIDGenerator");
++XPCOMUtils.defineLazyModuleGetter(this, "Jingle",
++  "resource://gre/modules/xmpp-jingle.jsm");
+ 
+ XPCOMUtils.defineLazyGetter(this, "_", function()
+   l10nHelper("chrome://chat/locale/xmpp.properties")
+ );
+ 
+ /* This is an ordered list, used to determine chat buddy flags:
+  *  index < member    -> noFlags
+  *  index = member    -> voiced
+@@ -274,16 +276,53 @@ const XMPPConversationPrototype = {
+       flags = {incoming: true, _alias: this.buddy.contactDisplayName};
+     if (aDate) {
+       flags.time = aDate / 1000;
+       flags.delayed = true;
+     }
+     this.writeMessage(from, aMsg, flags);
+   },
+ 
++  /* Called when the user requests a video call. */
++  webrtcCall: function(aType, aOffer) {
++    if (!aType)
++      return;
++
++    if (aType == "session-initiate")
++      this._account._callSid = this._account.generateId();
++
++    let item = Stanza.node("jingle", null,
++                           {xmlns: Stanza.NS.jingle,
++                            action: aType,
++                            initiator: this._account._connection._jid.jid,
++                            sid: this._account._callSid});
++
++    let iqContent = Jingle.sdp2xml(aOffer);
++
++    for (let contentNode of iqContent)
++      item.addChild(contentNode);
++
++    this._account.sendStanza(Stanza.iq("set", null, this.to, item));
++  },
++
++  /* called the the user wants to disconnect call. */
++  endCall: function() {
++    let item = Stanza.node("jingle", null,
++                           {xmlns: Stanza.NS.jingle,
++                            action: "session-terminate",
++                            initiator: this._account._connection._jid.jid,
++                            sid: this._account._callSid});
++    let reason = Stanza.node("reason", null);
++    reason.addChild(Stanza.node("success", null));
++    reason.addChild(Stanza.node("text", null, null, "Call disconnected"));
++    item.addChild(reason);
++
++    this._account.sendStanza(Stanza.iq("set", null, this.to, item));
++  },
++
+   /* Called when the user closed the conversation */
+   close: function() {
+     // TODO send the stanza indicating we have left the conversation?
+     GenericConvIMPrototype.close.call(this);
+   },
+   unInit: function() {
+     this._account.removeConversation(this.buddy.normalizedName);
+     delete this.buddy;
+@@ -816,32 +855,57 @@ const XMPPAccountPrototype = {
+       for each (let qe in aStanza.getChildren("query")) {
+         if (qe.uri != Stanza.NS.roster)
+           continue;
+ 
+         for each (let item in qe.getChildren("item"))
+           this._onRosterItem(item, true);
+         return;
+       }
++
++      let jStanza = aStanza.getElement(["jingle"]);
++      let stanzaAction = jStanza.attributes["action"];
++
++      if (jStanza && stanzaAction) {
++        let conversation =
++          this.createConversation(this.normalize(aStanza.attributes["from"]));
++        let contentNodes = jStanza.getElements(["content"]);
++
++        if ((stanzaAction == "session-initiate" ||
++             stanzaAction == "session-accept") && contentNodes.length > 0) {
++          this._callSid = jStanza.attributes["sid"];
++          let sdp = Jingle.xml2sdp(contentNodes);
++          let aTopic = stanzaAction == "session-initiate" ?
++                       "webrtc-call-offer" : "webrtc-call-answer";
++          conversation.notifyObservers(this, aTopic, sdp);
++        }
++        else if (stanzaAction == "session-terminate") {
++          if (jStanza.attributes["sid"] == this._callSid)
++            conversation.notifyObservers(this, "call-disconnect");
++        }
++      }
+     }
+ 
+     if (aStanza.attributes["from"] == this._jid.domain) {
+       let ping = aStanza.getElement(["ping"]);
+       if (ping && ping.uri == Stanza.NS.ping) {
+         let s = Stanza.iq("result", aStanza.attributes["id"], this._jid.domain);
+         this._connection.sendStanza(s);
+       }
+     }
+   },
+ 
+   /* Generate unique sid for the stanza. Using id and unique sid is defined in
+    * RFC 6120 (Section 8.2.3, 4.7.3).
+    */
+   generateId: function() UuidGenerator.generateUUID().toString().slice(1, -1),
+ 
++  /* Store the SID of the video call session */
++  _callSid: "",
++
+   /* Called when a presence stanza is received */
+   onPresenceStanza: function(aStanza) {
+     let from = aStanza.attributes["from"];
+     this.DEBUG("Received presence stanza for " + from);
+ 
+     let jid = this.normalize(from);
+     let type = aStanza.attributes["type"];
+     if (type == "subscribe") {

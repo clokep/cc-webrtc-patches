@@ -1,0 +1,731 @@
+# HG changeset patch
+# User Nihanth Subramanya <nhnt11@gmail.com>
+# Date 1413402118 14400
+#      Wed Oct 15 15:41:58 2014 -0400
+Bug 1018060: Implement voice call support in Instantbird using webRTC, UI part.
+
+diff --git a/im/content/conversation.xml b/im/content/conversation.xml
+--- a/im/content/conversation.xml
++++ b/im/content/conversation.xml
+@@ -6,35 +6,45 @@
+ 
+ <!DOCTYPE bindings [
+   <!ENTITY % instantbirdDTD SYSTEM "chrome://instantbird/locale/instantbird.dtd">
+   %instantbirdDTD;
+ ]>
+ 
+ <bindings id="conversationBindings"
+           xmlns="http://www.mozilla.org/xbl"
++          xmlns:html="http://www.w3.org/1999/xhtml"
+           xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+           xmlns:xbl="http://www.mozilla.org/xbl">
+ 
+   <binding id="conversation">
+     <resources>
+       <stylesheet src="chrome://instantbird/skin/conversation.css"/>
+     </resources>
+     <content>
+       <xul:vbox class="convBox" flex="1">
+         <xul:toolbar class="conv-top-info" anonid="conv-top-info" context="tabContextMenu"/>
+         <xul:hbox class="conv-top" flex="1" anonid="conv-top">
+-          <xul:notificationbox class="conv-messages" anonid="convNotificationBox" flex="1" xbl:inherits="chat">
+-            <xul:vbox flex="1">
+-              <xul:browser anonid="browser" type="content-conversation" flex="1"
+-                           xbl:inherits="tooltip=contenttooltip,contextmenu=contentcontextmenu,autoscrollpopup"/>
+-              <xul:progressmeter anonid="browserProgress" hidden="true"/>
+-              <xul:findbar anonid="FindToolbar" reversed="true"/>
++          <xul:vbox flex="1">
++            <xul:vbox class="videoCallBox" anonid="videoCallBox" hidden="true"
++                      flex="2">
++              <html:video class="remoteVideo" anonid="remoteVideo"/>
++              <xul:button class="endCallButton" anonid="endCallButton"
++                          command="cmd_endCall" tooltiptext="&endCall.label;"/>
++              <html:video class="localVideo" anonid="localVideo"/>
+             </xul:vbox>
+-          </xul:notificationbox>
++            <xul:notificationbox class="conv-messages" anonid="convNotificationBox" flex="1" xbl:inherits="chat">
++              <xul:vbox flex="1">
++                <xul:browser anonid="browser" type="content-conversation" flex="1"
++                             xbl:inherits="tooltip=contenttooltip,contextmenu=contentcontextmenu,autoscrollpopup"/>
++                <xul:progressmeter anonid="browserProgress" hidden="true"/>
++                <xul:findbar anonid="FindToolbar" reversed="true"/>
++              </xul:vbox>
++            </xul:notificationbox>
++          </xul:vbox>
+           <xul:splitter anonid="splitter" collapse="after" class="splitter conv-chat" xbl:inherits="chat">
+             <xul:grippy/>
+           </xul:splitter>
+           <xul:vbox class="conv-chat" width="150" xbl:inherits="chat">
+             <xul:hbox align="baseline" class="conv-nicklist-header">
+               <xul:label class="conv-nicklist-header-label"
+                          anonid="participantLabel"
+                          value="&chat.participants;"/>
+@@ -262,16 +272,270 @@
+             if (conv.isChat && aMsg.containsNick)
+               this.tab.setAttribute("attention", "true");
+             this.tab.setAttribute("unread", "true");
+           }
+         ]]>
+         </body>
+       </method>
+ 
++      <method name="initPeerConnection">
++        <parameter name="aPeerConnection"/>
++        <parameter name="aSuccessCallback"/>
++        <parameter name="aErrorCallback"/>
++        <body>
++        <![CDATA[
++          let remoteVideo = this.getElt("remoteVideo");
++          if (!this.pc) {
++            this.pc = new mozRTCPeerConnection();
++            this.pc.onaddstream = function(obj) {
++              remoteVideo.mozSrcObject = obj.stream;
++              remoteVideo.play();
++            };
++          }
++
++          return this.pc;
++        ]]>
++        </body>
++      </method>
++
++      <method name="getVideo">
++        <parameter name="aSuccessCallback"/>
++        <parameter name="aErrorCallback"/>
++        <body>
++        <![CDATA[
++          this.contentWindow.navigator.mozGetUserMedia({video: true, audio:true},
++                                                       stream => {
++            let localVideo = this.getElt("localVideo");
++            localVideo.mozSrcObject = stream;
++            localVideo.play();
++            if (this.pc)
++              this.pc.addStream(stream);
++            aSuccessCallback();
++          }, aErrorCallback);
++        ]]>
++        </body>
++      </method>
++
++      <method name="startCall">
++        <body>
++        <![CDATA[
++          // Display error notification for call failure.
++          let convBundle =
++            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
++          let cnb = this.getElt("convNotificationBox");
++
++          let fail = type => {
++            cnb.appendNotification(
++              convBundle.GetStringFromName("callError" +
++                                           (type || Notification) + ".label"),
++              "video-call-error",
++              null,
++              cnb.PRIORITY_INFO_HIGH,
++              null
++            );
++            this.endCall();
++          };
++
++          let pc = this.initPeerConnection();
++          this.getVideo(() => {
++            pc.createOffer(offer => {
++              pc.setLocalDescription(offer, () => {
++                if (this._conv)
++                  this._conv.webrtcCall("session-initiate", offer.sdp);
++                this.ongoingCall = true;
++              }, () => fail("LocalDesc"));
++            }, () => fail("Offer"));
++          }, () => fail("Video"));
++
++          // Display call wait notification until call is answered.
++          cnb.appendNotification(
++            convBundle.GetStringFromName("callWait.label"),
++            "video-call-wait",
++            null,
++            cnb.PRIORITY_INFO_HIGH,
++            [
++              {
++                accessKey: convBundle.GetStringFromName("cancelCall.accesskey"),
++                callback: () => this.endCall(true),
++                label: convBundle.GetStringFromName("cancelCall.label"),
++                popup: null
++              }
++            ]);
++
++          // Set call timeout to 30 sec.
++          const timer = 30;
++          this.callTimeout = setTimeout(() => this.endCall(true), timer * 1000);
++
++          // Disable video button on call start.
++          let videoCallButton = this.getElt("conv-top-info")
++                                    .querySelector(".videoCallButton")
++          if (videoCallButton)
++            videoCallButton.disabled = true;
++
++          this.resetInput();
++          return this.callTimeout;
++        ]]>
++        </body>
++      </method>
++
++      <method name="videoCallNotification">
++        <parameter name="aData"/>
++        <body>
++        <![CDATA[
++          let convBundle =
++            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
++          let cnb = this.getElt("convNotificationBox");
++          cnb.appendNotification(
++            convBundle.formatStringFromName("videoCallNotification.label",
++                                            [this._conv.title], 1),
++            "video-call-notification",
++            null,
++            cnb.PRIORITY_INFO_HIGH,
++            [
++              {
++                accessKey: convBundle.GetStringFromName("acceptCall.accesskey"),
++                callback: () => this.webrtcCallRequest(aData),
++                label: convBundle.GetStringFromName("acceptCall.label"),
++                popup: null
++              },
++              {
++                accessKey: convBundle.GetStringFromName("rejectCall.accesskey"),
++                callback: () => this.endCall(true),
++                label: convBundle.GetStringFromName("rejectCall.label"),
++                popup: null
++              }
++            ]);
++
++          // Disable video button as soon as call notification is received so
++          // that user cannot make another call until he accepts/rejects it.
++          let videoCallButton = this.getElt("conv-top-info")
++                                    .querySelector(".videoCallButton")
++          if (videoCallButton)
++            videoCallButton.disabled = true;
++
++          this.ongoingCall = true;
++        ]]>
++        </body>
++      </method>
++
++      <method name="webrtcCallRequest">
++        <parameter name="aOffer"/>
++        <body>
++        <![CDATA[
++          // Display error notification for call failure.
++          let convBundle =
++            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
++          let cnb = this.getElt("convNotificationBox");
++          let fail = type => {
++            cnb.appendNotification(
++              convBundle.GetStringFromName("callError" +
++                                           (type || Notification) + ".label"),
++              "video-call-error",
++              null,
++              cnb.PRIORITY_INFO_HIGH,
++              null
++            );
++            this.endCall(true);
++          };
++
++          let offer = {type: "offer", sdp: aOffer};
++          let pc = this.initPeerConnection();
++          offer = new mozRTCSessionDescription(offer);
++          pc.setRemoteDescription(offer, () => {
++            this.getVideo(() => {
++              pc.createAnswer(answer => {
++                pc.setLocalDescription(answer, () => {
++                  if (this._conv)
++                    this._conv.webrtcCall("session-accept", answer.sdp);
++                  this.getElt("videoCallBox").removeAttribute("hidden");
++                  this.ongoingCall = true;
++                }, () => fail("LocalDesc"));
++              }, () => fail("Answer"));
++            }, () => fail("Video"));
++          }, () => fail("RemoteDesc"));
++        ]]>
++        </body>
++      </method>
++
++      <method name="webrtcAnswerCall">
++        <parameter name="aAnswer"/>
++        <body>
++        <![CDATA[
++          let answer = {type: "answer", sdp: aAnswer};
++          answer = new mozRTCSessionDescription(answer);
++          if (this.pc)
++            this.pc.setRemoteDescription(answer);
++
++          // Clear the timeout
++          clearTimeout(this.callTimeout);
++          delete this.callTimeout;
++
++          let callWaitNotification = this.getElt("convNotificationBox");
++          if (callWaitNotification.getNotificationWithValue("video-call-wait"))
++            callWaitNotification.removeCurrentNotification();
++
++          this.getElt("videoCallBox").removeAttribute("hidden");
++        ]]>
++        </body>
++      </method>
++
++      <method name="endCall">
++        <parameter name="aSender"/>
++        <body>
++        <![CDATA[
++          this.getElt("videoCallBox").setAttribute("hidden", "true");
++
++          let remoteVideo = this.getElt("remoteVideo");
++          if (remoteVideo) {
++            remoteVideo.pause();
++            if (remoteVideo.mozSrcObject)
++              remoteVideo.mozSrcObject = null;
++          }
++
++          let localVideo = this.getElt("localVideo");
++          if (localVideo) {
++            if (localVideo.mozSrcObject) {
++              localVideo.mozSrcObject.stop();
++              localVideo.mozSrcObject = null;
++            }
++          }
++
++          if (this.pc) {
++            this.pc.close();
++            this.pc = null;
++          }
++
++          let videoCallButton = this.getElt("conv-top-info")
++                                    .querySelector(".videoCallButton")
++          if (videoCallButton)
++            videoCallButton.removeAttribute("disabled");
++
++          let videoCallNotification = this.getElt("convNotificationBox");
++          if (videoCallNotification.getNotificationWithValue("video-call-notification") ||
++              videoCallNotification.getNotificationWithValue("video-call-wait"))
++            videoCallNotification.removeCurrentNotification();
++
++          // It is used to send the session-terminate stanza to the user to
++          // disconnect call from his side too.
++          if (aSender == true)
++            this._conv.endCall();
++
++          // Call-end system message.
++          let convBundle =
++            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
++          if (this._conv)
++            this._conv.systemMessage(convBundle
++                                      .GetStringFromName("endVideoCall.label"));
++
++          delete this.ongoingCall;
++        ]]>
++        </body>
++      </method>
++
+       <method name="sendMsg">
+         <parameter name="aMsg"/>
+         <body>
+         <![CDATA[
+           if (!aMsg)
+             return;
+ 
+           let account = this._conv.account;
+@@ -1732,22 +1996,55 @@
+             cti.setAttribute("statusMessage", statusString + statusText);
+             cti.setAttribute("status", Status.toAttribute(statusType));
+             cti.setAttribute("statusTypeTooltiptext", statusString);
+           }
+         ]]>
+         </body>
+       </method>
+ 
++      <method name="updateVideoCallButton">
++        <body>
++        <![CDATA[
++          let bundle =
++            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
++          let videoCallButton = this.getElt("conv-top-info")
++                                .querySelector(".videoCallButton");
++
++
++          if (videoCallButton && this._conv.account.protocol.id != "prpl-jabber") {
++            videoCallButton.remove();
++          }
++          if (!videoCallButton && this._conv.account.protocol.id == "prpl-jabber") {
++            let videoCallButton = document.createElement("toolbarbutton");
++            videoCallButton.classList.add("videoCallButton");
++            videoCallButton.setAttribute("tooltiptext",
++                                         bundle.GetStringFromName("videoCallButton.label"));
++            videoCallButton.setAttribute("accesskey",
++                                         bundle.GetStringFromName("videoCallButton.accesskey"));
++            videoCallButton.setAttribute("command", "cmd_startCall");
++            let cti = this.getElt("conv-top-info");
++            cti.insertBefore(videoCallButton, cti.firstChild);
++          }
++
++        ]]>
++        </body>
++      </method>
++
+       <method name="initConversationUI">
+         <body>
+         <![CDATA[
+-          let cti = this.getElt("conv-top-info");
++
++          let bundle =
++            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
+           // The toolbarbuttons for different services to be added below.
+ 
++          // Video call button
++          this.updateVideoCallButton();
++
+           // Target switcher button.
+           let targetSwitcher = document.createElement("toolbarbutton");
+           targetSwitcher.setAttribute("disabled", "true");
+           targetSwitcher.classList.add("alltargets-button");
+           let account = this._conv.account;
+           targetSwitcher.setAttribute("image",
+                                       account.protocol.iconBaseURI + "icon.png");
+           let targetTooltip =
+@@ -1755,16 +2052,17 @@
+                                              [this._conv.title,
+                                               account.name,
+                                               account.protocol.name], 3);
+           targetSwitcher.setAttribute("tooltiptext", targetTooltip);
+           let targetPopup = document.createElement("menupopup");
+           targetPopup.classList.add("all-targets-popup");
+           targetPopup.setAttribute("postion", "after_end");
+           targetSwitcher.appendChild(targetPopup);
++          let cti = this.getElt("conv-top-info");
+           cti.appendChild(targetSwitcher);
+ 
+           if (this._conv.isChat) {
+             this.updateTopic();
+             this.setAttribute("chat", "true");
+             this.tab.setAttribute("chat", "true");
+             this.tab.setAttribute("prpl", this._conv.account.protocol.id);
+ 
+@@ -1852,16 +2150,17 @@
+             break;
+ 
+           case "replying-to-prompt":
+             this.addPrompt(aData);
+             break;
+ 
+           case "update-conv-buddy":
+           case "target-prpl-conversation-changed":
++            this.updateVideoCallButton();
+           case "update-conv-title":
+             if (this.tab)
+               this.tab.setAttribute("label", this.conv.title);
+             // Update the status too.
+           case "update-buddy-status":
+           case "update-buddy-icon":
+           case "update-conv-chatleft":
+           case "update-conv-chatjoining":
+@@ -1892,16 +2191,30 @@
+             this.updateTopic();
+             break;
+ 
+           case "ui-conversation-closed":
+           case "ui-conversation-destroyed":
+             this.editor.disabled = true;
+             this._forgetConv();
+             break;
++
++          case "webrtc-call-offer":
++            this.videoCallNotification(aData);
++            break;
++
++          case "webrtc-call-answer":
++            if (this.callTimeout)
++              this.webrtcAnswerCall(aData);
++            break;
++
++          case "call-disconnect":
++            if (this.ongoingCall == true)
++              this.endCall();
++            break;
+           }
+         ]]>
+         </body>
+       </method>
+ 
+       <method name="onNicklistKeyPress">
+         <parameter name="event"/>
+         <body>
+diff --git a/im/content/instantbird.xul b/im/content/instantbird.xul
+--- a/im/content/instantbird.xul
++++ b/im/content/instantbird.xul
+@@ -69,16 +69,22 @@
+              oncommand="var conv = getTabBrowser().selectedConversation;
+                         if (conv) conv.findbar.onFindCommand();"/>
+     <command id="cmd_findAgain"
+              oncommand="var conv = getTabBrowser().selectedConversation;
+                         if (conv) conv.findbar.onFindAgainCommand(true);"/>
+     <command id="cmd_findPrevious"
+              oncommand="var conv = getTabBrowser().selectedConversation;
+                         if (conv) conv.findbar.onFindAgainCommand(false);"/>
++    <command id="cmd_startCall"
++             oncommand="var conv = getTabBrowser().selectedConversation;
++                        if (conv) conv.startCall();"/>
++    <command id="cmd_endCall"
++             oncommand="var conv = getTabBrowser().selectedConversation;
++                        if (conv) conv.endCall(true);"/>
+     <commandset id="editMenuCommands"/>
+   </commandset>
+ 
+   <keyset id="conversationsKeys">
+     <key id="key_newtab" key="t" modifiers="accel" command="cmd_newtab"/>
+     <key id="key_close" key="w" modifiers="accel" command="cmd_close"/>
+     <key id="key_putOnHold" keycode="VK_ESCAPE" command="cmd_putOnHold"/>
+     <key id="key_showLogs" key="h" modifiers="accel,shift" command="cmd_showLogs"/>
+diff --git a/im/locales/en-US/chrome/instantbird/conversation.properties b/im/locales/en-US/chrome/instantbird/conversation.properties
+--- a/im/locales/en-US/chrome/instantbird/conversation.properties
++++ b/im/locales/en-US/chrome/instantbird/conversation.properties
+@@ -5,8 +5,29 @@
+ contextAddContact.label=Add Contact…
+ contextAddContact.accesskey=A
+ contextShowLogs.label=Show Logs
+ contextShowLogs.accesskey=L
+ contextCloseConv.label=Close Conversation
+ contextCloseConv.accesskey=v
+ contextHideConv.label=Put Conversation on Hold
+ contextHideConv.accesskey=h
++
++videoCallButton.label=Video call
++videoCallButton.accesskey=c
++
++# Call Notification
++# %1$S is the call initiator's identiy.
++acceptCall.label=Accept
++acceptCall.accesskey=A
++cancelCall.label=Cancel
++cancelCall.accesskey=C
++rejectCall.label=Reject
++rejectCall.accesskey=R
++callErrorAnswer.label=SDP session description answer creation failed. Sorry, the call cannot be established.
++callErrorLocalDesc.label=Unable to set local description. Sorry, the call cannot be established.
++callErrorNotification.label=Sorry, the call cannot be established.
++callErrorOffer.label=SDP session description offer creation failed. Sorry, the call cannot be established.
++callErrorRemoteDesc.label=Unable to set remote description. Sorry, the call cannot be established.
++callErrorVideo.label=Failed to intialize video. Sorry, the call cannot be established.
++callWait.label=Waiting for the response…
++endVideoCall.label=The video call has ended.
++videoCallNotification.label=%1$S is trying to call you.
+diff --git a/im/locales/en-US/chrome/instantbird/instantbird.dtd b/im/locales/en-US/chrome/instantbird/instantbird.dtd
+--- a/im/locales/en-US/chrome/instantbird/instantbird.dtd
++++ b/im/locales/en-US/chrome/instantbird/instantbird.dtd
+@@ -153,8 +153,11 @@
+ <!ENTITY preferencesCmdMac.label        "Preferences…">
+ <!ENTITY preferencesCmdMac.commandkey   ",">
+ <!ENTITY servicesMenuMac.label          "Services">
+ <!ENTITY hideThisAppCmdMac.label        "Hide &brandShortName;">
+ <!ENTITY hideThisAppCmdMac.commandkey   "H">
+ <!ENTITY hideOtherAppsCmdMac.label      "Hide Others">
+ <!ENTITY hideOtherAppsCmdMac.commandkey "H">
+ <!ENTITY showAllAppsCmdMac.label        "Show All">
++
++<!-- Video call support -->
++<!ENTITY endCall.label                  "End video call">
+diff --git a/im/themes/conversation.css b/im/themes/conversation.css
+--- a/im/themes/conversation.css
++++ b/im/themes/conversation.css
+@@ -137,16 +137,44 @@
+   border-radius: 3px;
+ }
+ 
+ .displayNameAndToolbar {
+   border-bottom: 1px solid rgba(0,0,0,0.25);
+   margin: 1px 4px 22px 0;
+ }
+ 
++.videoCallButton {
++  list-style-image: url("chrome://instantbird/skin/webcam.png");
++  -moz-image-region: rect(0, 16px, 16px, 0);
++}
++
++.videoCallButton:hover:not([disabled = "true"]) {
++  -moz-image-region: rect(16px, 16px, 32px, 0);
++}
++
++.videoCallButton[disabled="true"] {
++  list-style-image: url("chrome://instantbird/skin/webcam-active.png");
++}
++
++@media (min-resolution: 2dppx) {
++  .videoCallButton {
++    list-style-image: url("chrome://instantbird/skin/webcam@2x.png");
++    -moz-image-region: rect(0, 32px, 32px, 0);
++  }
++
++  .videoCallButton:hover:not([disabled = "true"]) {
++    -moz-image-region: rect(32px, 32px, 64px, 0);
++  }
++
++  .videoCallButton[disabled="true"] {
++    list-style-image: url("chrome://instantbird/skin/webcam-active@2x.png");
++  }
++}
++
+ .status-overlay-icon[status="away"],
+ .status-overlay-icon[status="unavailable"] {
+   list-style-image: url('chrome://chat/skin/away.png');
+ }
+ 
+ .status-overlay-icon[status="idle"] {
+   list-style-image: url('chrome://chat/skin/idle.png');
+ }
+@@ -399,8 +427,69 @@ grippy {
+ .conv-nicklist:focus > .listitem-iconic[inactive][selected] > .listcell-iconic > .listcell-label {
+   color: HighlightText !important;
+ }
+ 
+ .alltargets-item-icon {
+   min-width: 16px;
+   min-height: 16px;
+ }
++
++/* Video call CSS */
++.videoCallBox {
++  position: fixed;
++  width: 100%;
++  min-height: 50%;
++}
++
++.remoteVideo {
++  position: fixed;
++  width: 100%;
++  height: 50%;
++  z-index: 1;
++  background: black;
++}
++
++.localVideo {
++  position: absolute;
++  height: 20%;
++  z-index: 2;
++  top: calc(80% - 6px);
++  right: 2px;
++  border: 2px solid rgba(255, 255, 255, 0.25);
++  border-radius: 5px;
++}
++
++.endCallButton {
++  -moz-appearance: none;
++  position: absolute;
++  z-index: 2;
++  margin-top: 8px;
++  margin-left: calc(100% - 24px);
++  min-width: 16px;
++  border: none;
++  list-style-image: url("chrome://global/skin/icons/close.png");
++  -moz-image-region: rect(0, 16px, 16px, 0);
++  background: radial-gradient(circle, rgba(255, 255, 255, 0.25) 25%, transparent 100%);
++}
++
++.endCallButton:hover {
++  -moz-image-region: rect(0, 32px, 16px, 16px);
++}
++
++.endCallButton:active {
++  -moz-image-region: rect(0, 48px, 16px, 32px);
++}
++
++@media (min-resolution: 2dppx) {
++  .endCallButton {
++    list-style-image: url("chrome://global/skin/icons/close@2x.png");
++    -moz-image-region: rect(0, 32px, 32px, 0);
++  }
++
++  .endCallButton:hover {
++    -moz-image-region: rect(0, 64px, 32px, 32px);
++  }
++
++  .endCallButton:active {
++    -moz-image-region: rect(0, 96px, 32px, 64px);
++  }
++}
+diff --git a/im/themes/jar.mn b/im/themes/jar.mn
+--- a/im/themes/jar.mn
++++ b/im/themes/jar.mn
+@@ -30,24 +30,26 @@ instantbird.jar:
+ *	skin/classic/instantbird/viewlog.css
+ 	skin/classic/instantbird/newMessage.png
+ 	skin/classic/instantbird/expand.png
+ 	skin/classic/instantbird/collapse.png
+ 	skin/classic/instantbird/userIcon.png
+ 	skin/classic/instantbird/userIcon.svg
+ 	skin/classic/instantbird/multiUserIcon.png
+ 	skin/classic/instantbird/webcam.png		(webRTC-shareDevice-16.png)
++	skin/classic/instantbird/webcam-active.png     (webRTC-sharingDevice-16.png)
+ 	skin/classic/instantbird/select-file.png	(select-file.png)
+ #ifdef XP_UNIX
+ #ifdef XP_MACOSX
+ 	skin/classic/instantbird/tag.png                (tag-mac.png)
+ 	skin/classic/instantbird/tag@2x.png             (tag-mac@2x.png)
+ 	skin/classic/instantbird/actionicon-tab.png     (actionicon-tab-mac.png)
+ 	skin/classic/instantbird/actionicon-tab@2x.png  (actionicon-tab-mac@2x.png)
+ 	skin/classic/instantbird/webcam@2x.png          (webRTC-shareDevice-16@2x.png)
++	skin/classic/instantbird/webcam-active@2x.png   (webRTC-sharingDevice-16@2x.png)
+ 	skin/classic/instantbird/select-file@2x.png     (select-file@2x.png)
+ #else
+ 	skin/classic/instantbird/tag.png    (tag-linux.png)
+ 	skin/classic/instantbird/actionicon-tab.png    (actionicon-tab-linux.png)
+ #endif
+ #else
+ 	skin/classic/instantbird/tag.png    (tag-win.png)
+ 	skin/classic/instantbird/actionicon-tab.png    (actionicon-tab-win.png)
+@@ -133,16 +135,17 @@ instantbird.jar:
+ *	skin/classic/aero/instantbird/viewlog.css
+ 	skin/classic/aero/instantbird/newMessage.png
+ 	skin/classic/aero/instantbird/expand.png
+ 	skin/classic/aero/instantbird/collapse.png
+ 	skin/classic/aero/instantbird/userIcon.png
+ 	skin/classic/aero/instantbird/userIcon.svg
+ 	skin/classic/aero/instantbird/multiUserIcon.png
+ 	skin/classic/aero/instantbird/webcam.png	(webRTC-shareDevice-16.png)
++	skin/classic/aero/instantbird/webcam-active.png     (webRTC-sharingDevice-16.png)
+ 	skin/classic/aero/instantbird/select-file.png	(select-file.png)
+ 	skin/classic/aero/instantbird/newConversation.png
+ 	skin/classic/aero/instantbird/tag.png		(tag-aero.png)
+ 	skin/classic/aero/instantbird/actionicon-tab.png        (actionicon-tab-win.png)
+ 	skin/classic/aero/instantbird/preferences/Options.png        (preferences-winstripe/Options-aero.png)
+ 	skin/classic/aero/instantbird/preferences/alwaysAsk.png      (preferences-winstripe/alwaysAsk-aero.png)
+ 	skin/classic/aero/instantbird/preferences/application.png    (preferences-winstripe/application-aero.png)
+ 	skin/classic/aero/instantbird/preferences/applications.css   (preferences-winstripe/applications.css)
+diff --git a/im/themes/webRTC-sharingDevice-16.png b/im/themes/webRTC-sharingDevice-16.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..a670676a01b7b46e4b2556c4e98542e821d3f047
+GIT binary patch
+literal 404
+zc$@*00c-w=P)<h;3K|Lk000e1NJLTq000mG000mO1^@s6AM^iV00047Nkl<Zc-p0s
+zy-tH*6o!d`l%b|YTT1z9aHyk`cjDrWm>4j%3f5M!;^1|dcmoc`A8KQTHfrPVY9gC%
+zt)J%*DhrY{3{S$xdEbXG<WR?iN(EK#@~J=z1Iz&mp#FmrW*97m9TuP|92oui)7^pe
+z)4G>Q95};FC}Hg{rV8gHc+OL3Z}i3S;j2pQw}n`6))<H*$S$`1%(Ch6uF(?+oMjZK
+zARz4*HIXLV<iKZFO|SI6Kdcb!U^fu#cx7TeRT9}7Dx~=!`mIMfI725A7<U2&rUE*V
+zVC$BLD@s!Vok&pc7U3tA6EQu37;f>ybW6b*I+38(DG<{Y64``;^~tPkINURSz2+4D
+z1hRg`jqv4mFCLs>2C`Mlr<b(r+|BxV9t9E#IL*nPXcydAzvM_9IKxc1NE!QkM%6o6
+y6P|OEwd4RfVU^`D!>panVuwc2WR+8qTJQ@#3j%MMTlFOX0000<MNUMnLSTXuc(MHe
+
+diff --git a/im/themes/webRTC-sharingDevice-16@2x.png b/im/themes/webRTC-sharingDevice-16@2x.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..93fe47d03998fa07181aa50297115dab659697f8
+GIT binary patch
+literal 716
+zc$@*u0yF)IP)<h;3K|Lk000e1NJLTq001BW001Be1^@s6b9#F80007$Nkl<Zc-rlk
+zOK%cU7=|mAAUMLnFu+i5rv8D(gv7lIe}W7Df*Th`pqBd-1gnX0?ZV&S)_9?e)Iu##
+zTe05bB^qO5Otl(&e7{KI;9(<7zy*sZ2l&qSzVDpjz?mt=*jSkan7TS%{+|H*fCacg
+z5JUzf)YY(%CTIA^%S59-fTjH2dNkXTwZ#qpUg6;k8wBdjHsux4BF#R=)+@WFnc_<!
+ziq|%M04dvaSIV6byY%!hyZmf0sFyULb%!){<|ZJN-rA1mn%+*j;bnNQ=mP}vEoFD<
+zNf;uLp&*TXTlq$sI&(+ig>W+8@_j5n4zb0yp8`bm0U~P4kLHLWkXF}V8o1PL`)Rf9
+z-@)qquJ;R&N7KdaupvN;42}R#Zp)EJpdTfe>+5`groym1hR|JsW0|&i4OhEY>I8f0
+z@ZtmH)_n{U4S{xqx+&jK+X}nzD8SX>#Rtef@L_V$5Q<x1Gk~#w9bSBZ%$k>)MgqL}
+z0O^K@mTn}#iw}^hd+3*JB#;*$U{%KcR7L{4_yEcKGHnk-$gL~%MZ?&?4lh2y!it-=
+zhase~#F>`kI*bs+%hln<2RL7oXtEK&Kq7-^vU#w$P?LUU);v9Rc<}+|@3|Nz8UnP)
+zU=~QJ4eOctn(J$-F6--DfN(-{(e^L|(jrYT4a98cz^R1h{FGdkyLCQ5AYOHTNzsJ*
+zaF9m4Dt;zS-QV#c^||Flyy|$B#O+B`om>DZrU|#`-cZU^eL&Dl8gWgyNt%D1hHS-m
+z=4ec_H_qO+QvhGjk*x6AJa?`t+>I@ZJMm?aVMYE8^u#LScW6|KZ_IQ3j%3}><kE-z
+yboExi6{R5$rPM3+9!hz1waIhA<k@ii0e%5Rx*T}Y=V6=x0000<MNUMnLSTY@Tw<^Q
+

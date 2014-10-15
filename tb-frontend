@@ -1,0 +1,335 @@
+
+# HG changeset patch
+# User Florian Quèze <florian@queze.net>
+# Date 1352385670 -3600
+# Node ID 931706bc0ce9c3d1f1cc14ac517f9647d723d8f7
+# Parent  7b51fd24e5bbd39f05de2bac32f3d001aabb6589
+try: -b o -p linux,linux64,macosx64,win32 -u none -t none
+
+diff --git a/mail/components/im/all-im.js b/mail/components/im/all-im.js
+--- a/mail/components/im/all-im.js
++++ b/mail/components/im/all-im.js
+@@ -4,8 +4,11 @@
+ 
+ pref("messenger.options.messagesStyle.theme", "messenger-messagestyles");
+ pref("messenger.options.emoticonsTheme", "messenger-emoticons");
+ pref("messenger.conversations.textbox.autoResize", true);
+ pref("messenger.conversations.doubleClickToReply", true);
+ pref("purple.debug.loglevel", 3);
+ pref("chat.twitter.consumerKey", "7Gzq35FbZLYJQ9n3sJmJw");
+ pref("chat.twitter.consumerSecret", "fz0dXr3yul1uncHNf0vITTiIOtSKAVCvopKDrqR1Mo");
++pref("media.navigator.enabled", true);
++pref("media.navigator.permission.disabled", true);
++pref("media.peerconnection.enabled", true);
+diff --git a/mail/components/im/content/imconversation.xml b/mail/components/im/content/imconversation.xml
+--- a/mail/components/im/content/imconversation.xml
++++ b/mail/components/im/content/imconversation.xml
+@@ -149,16 +149,46 @@
+           }
+           else {
+             // Buddy no longer in the room
+             color = this._computeColor(name);
+           }
+           aMsg.color = "color: hsl(" + color + ", 100%, 40%);";
+         }
+ 
++        try {
++          let sdp = JSON.parse(aMsg.message)
++          if (("type" in sdp) && ("sdp" in sdp)) {
++            if (!aMsg.incoming)
++              return;
++
++            if (sdp.type == "offer") {
++              let conv = this._conv;
++              let fail = function(err) {
++                conv.systemMessage("failed to call: " + err);
++              };
++              let pc = this.initPeerConnection();
++              pc.setRemoteDescription(sdp, (function() {
++                this.getAudioVideo(function() {
++                  pc.createAnswer(function(answer) {
++                    pc.setLocalDescription(answer, function() {
++                      conv.sendMsg(JSON.stringify(answer));
++                    }, fail);
++                  }, fail);
++                }, fail);
++              }).bind(this), fail);
++              return;
++            }
++            else if (sdp.type == "answer") {
++              this.pc.setRemoteDescription(sdp);
++              return;
++            }
++          }
++        } catch(e) { }
++
+         let read = this._readCount > 0;
+         this.browser.appendMessage(aMsg, read);
+         if (read) {
+           --this._readCount;
+           return;
+         }
+ 
+ /*
+@@ -176,16 +206,98 @@
+           if (conv.isChat && aMsg.containsNick)
+             this.tab.setAttribute("attention", "true");
+           this.tab.setAttribute("unread", "true");
+         }
+       ]]>
+       </body>
+      </method>
+ 
++     <method name="initPeerConnection">
++      <parameter name="aPeerConnection"/>
++      <parameter name="aSuccessCallback"/>
++      <parameter name="aErrorCallback"/>
++      <body>
++      <![CDATA[
++        let doc = this.browser.contentDocument;
++        let body = doc.getElementById("ibcontent");
++
++        let win = this.browser.contentWindow;
++        let height = win.innerHeight;
++        let width = win.innerWidth;
++
++        let remoteVideo = doc.createElement("video");
++        remoteVideo.setAttribute("id", "remoteVideo");
++        remoteVideo.setAttribute("style", "position: fixed; top: 0; left: 0; z-index: 1; background: black;");
++        body.appendChild(remoteVideo);
++
++        let localVideo = doc.createElement("video");
++        localVideo.setAttribute("id", "localVideo");
++        localVideo.setAttribute("width", "108");
++        localVideo.setAttribute("height", "81");
++        localVideo.setAttribute("style", "position: fixed; z-index: 2;");
++        body.appendChild(localVideo);
++
++        let localAudio = doc.createElement("audio");
++        localAudio.setAttribute("id", "localAudio");
++        localAudio.setAttribute("muted", "true");
++        body.appendChild(localAudio);
++
++        let remoteAudio = doc.createElement("audio");
++        remoteAudio.setAttribute("id", "remoteAudio");
++        body.appendChild(remoteAudio);
++
++        doc.getElementById("Chat").setAttribute("style", "position: fixed; left: 0; width: 100%; overflow: auto !important;");
++
++        this.resizeVideo();
++
++        this.pc = new mozRTCPeerConnection();
++
++        this.pc.onaddstream = function(obj) {
++          let type = obj.type;
++          if (type == "video") {
++            remoteVideo.mozSrcObject = obj.stream;
++            remoteVideo.play();
++          } else if (type == "audio") {
++            remoteAudio.mozSrcObject = obj.stream;
++            remoteAudio.play();
++          } else {
++            aErrorCallback("sender onaddstream of unknown type, obj = " + obj.toSource());
++          }
++        };
++
++        return this.pc;
++      ]]>
++      </body>
++     </method>
++
++     <method name="getAudioVideo">
++      <parameter name="aSuccessCallback"/>
++      <parameter name="aErrorCallback"/>
++      <body>
++      <![CDATA[
++        let win = this.browser.contentWindow;
++        let pc = this.pc;
++        win.navigator.mozGetUserMedia({video: true}, function(stream) {
++          let localVideo = win.document.getElementById("localVideo");
++          localVideo.mozSrcObject = stream;
++          localVideo.play();
++          pc.addStream(stream);
++          win.navigator.mozGetUserMedia({audio: true}, function(stream) {
++            let localAudio = win.document.getElementById("localAudio");
++            localAudio.mozSrcObject = stream;
++            localAudio.play();
++            pc.addStream(stream);
++            aSuccessCallback();
++          }, aErrorCallback);
++        }, aErrorCallback);
++      ]]>
++      </body>
++     </method>
++
+      <method name="sendMsg">
+       <parameter name="aMsg"/>
+       <body>
+       <![CDATA[
+         if (!aMsg)
+           return;
+ 
+         if (aMsg[0] == "/") {
+@@ -198,16 +310,32 @@
+           }
+           else if (aMsg.match(/^\/(?:say)? .*/))
+             aMsg = aMsg.slice(aMsg.indexOf(" ") + 1);
+           else if (Services.cmd.executeCommand(aMsg, this._conv.target)) {
+             this._conv.sendTyping(0);
+             this.resetInput();
+             return;
+           }
++          else if (aMsg == "/call") {
++            let conv = this._conv;
++            let fail = function(err) {
++              conv.systemMessage("failed to call: " + err);
++            };
++            let pc = this.initPeerConnection();
++            this.getAudioVideo(function() {
++              pc.createOffer(function(offer) {
++                pc.setLocalDescription(offer, function() {
++                  conv.sendMsg(JSON.stringify(offer));
++                }, fail);
++              }, fail);
++            }, fail);
++            this.resetInput();
++            return;
++          }
+           else if (this._conv.account.protocol.slashCommandsNative) {
+             let cmd = aMsg.match(/^\/[^ ]+/);
+             if (cmd && cmd != "/me") {
+               this._conv.systemMessage(
+                 this.bundle.formatStringFromName("unknownCommand", [cmd], 1),
+                 true);
+               return;
+             }
+@@ -648,22 +776,49 @@
+           if (convTopHeight == convTopMinHeight) {
+             textbox.parentNode.height = parseInt(textbox.parentNode.minHeight);
+             convTopHeight = parseInt(convTopStyle.getPropertyValue("height"));
+             textbox.parentNode.height = parseInt(textbox.parentNode.minHeight) +
+                                         (convTopHeight - convTopMinHeight);
+           }
+         }
+ 
++        if ("pc" in this)
++          this.resizeVideo();
++
+         if (TextboxSize.autoResize)
+           this.inputExpand();
+       ]]>
+       </body>
+      </method>
+ 
++     <method name="resizeVideo">
++      <body>
++      <![CDATA[
++        let win = this.browser.contentWindow;
++        let height = win.innerHeight;
++        let width = win.innerWidth;
++        let doc = this.browser.contentDocument;
++
++        let remoteVideo = doc.getElementById("remoteVideo");
++        remoteVideo.setAttribute("width", width);
++        remoteVideo.setAttribute("height", height / 2);
++
++        let localVideo = doc.getElementById("localVideo");
++        localVideo.style.top = (Math.floor(height / 2) - 81) + "px";
++        localVideo.style.left = (width - 108) + "px";
++
++        let chat = doc.getElementById("Chat");
++        chat.style.top = (height / 2) + "px";
++        chat.style.height = (height / 2) + "px";
++      ]]>
++      </body>
++     </method>
++
++
+      <method name="_onTextboxUnderflow">
+       <parameter name="event"/>
+       <body>
+       <![CDATA[
+         if (TextboxSize.autoResize)
+           this.inputField.style.overflowY = "hidden";
+       ]]>
+       </body>
+diff --git a/mail/confvars.sh b/mail/confvars.sh
+--- a/mail/confvars.sh
++++ b/mail/confvars.sh
+@@ -17,16 +17,17 @@ MOZ_COMPOSER=1
+ if test "$OS_ARCH" = "WINNT"; then
+   if ! test "$HAVE_64BIT_OS"; then
+     MOZ_VERIFY_MAR_SIGNATURE=1
+     MOZ_MAINTENANCE_SERVICE=1
+   fi
+ fi
+ 
+ MOZ_SAFE_BROWSING=1
++MOZ_MEDIA_NAVIGATOR=1
+ MOZ_MORK=1
+ if test -z "$MOZ_INCOMPLETE_EXTERNAL_LINKAGE"; then
+ MOZ_APP_COMPONENT_LIBS="xpautocomplete mailcomps $MAIL_COMPONENT $LDAP_COMPONENT $MORK_COMPONENT"
+ MOZ_APP_COMPONENT_MODULES="MODULE(xpAutoComplete) MODULE(nsMailCompsModule) $MAIL_MODULE $LDAP_MODULE $MORK_MODULE"
+ MOZ_APP_EXTRA_LIBS="$LDAP_LIBS"
+ fi
+ 
+ MOZ_APP_VERSION_TXT=${_topsrcdir}/$MOZ_BUILD_APP/config/version.txt
+diff --git a/mail/installer/package-manifest.in b/mail/installer/package-manifest.in
+--- a/mail/installer/package-manifest.in
++++ b/mail/installer/package-manifest.in
+@@ -480,16 +480,18 @@
+ @BINPATH@/components/nsPrompter.manifest
+ @BINPATH@/components/nsSearchService.js
+ @BINPATH@/components/nsSearchSuggestions.js
+ @BINPATH@/components/nsTaggingService.js
+ @BINPATH@/components/PlacesCategoriesStarter.js
+ @BINPATH@/components/TCPSocket.js
+ @BINPATH@/components/TCPSocketParentIntermediary.js
+ @BINPATH@/components/TCPSocket.manifest
++@BINPATH@/components/PeerConnection.js
++@BINPATH@/components/PeerConnection.manifest
+ @BINPATH@/components/TelemetryPing.js
+ @BINPATH@/components/TelemetryPing.manifest
+ @BINPATH@/components/toolkitplaces.manifest
+ @BINPATH@/components/toolkitsearch.manifest
+ #ifdef XP_MACOSX
+ @BINPATH@/components/libalerts.dylib
+ #elifdef XP_UNIX
+ @BINPATH@/components/toolkitremote.xpt
+@@ -525,16 +527,17 @@
+ @BINPATH@/components/dom_contacts.xpt
+ @BINPATH@/components/dom_core.xpt
+ @BINPATH@/components/dom_css.xpt
+ @BINPATH@/components/dom_events.xpt
+ @BINPATH@/components/dom_geolocation.xpt
+ @BINPATH@/components/dom_html.xpt
+ @BINPATH@/components/dom_indexeddb.xpt
+ @BINPATH@/components/dom_json.xpt
++@BINPATH@/components/dom_media.xpt
+ @BINPATH@/components/dom_network.xpt
+ @BINPATH@/components/dom_notification.xpt
+ @BINPATH@/components/dom_offline.xpt
+ @BINPATH@/componnets/dom_power.xpt
+ @BINPATH@/components/dom_range.xpt
+ @BINPATH@/components/dom_sidebar.xpt
+ @BINPATH@/components/dom_sms.xpt
+ @BINPATH@/components/dom_smil.xpt
+@@ -652,16 +655,17 @@
+ @BINPATH@/components/contentSecurityPolicy.manifest
+ @BINPATH@/components/directory.xpt
+ @BINPATH@/components/jsconsole-clhandler.js
+ @BINPATH@/components/jsconsole-clhandler.manifest
+ @BINPATH@/components/layout_xul_tree.xpt
+ @BINPATH@/components/mozfind.xpt
+ @BINPATH@/components/mimetype.xpt
+ @BINPATH@/components/parentalcontrols.xpt
++@BINPATH@/components/peerconnection.xpt
+ @BINPATH@/components/exthandler.xpt
+ @BINPATH@/components/exthelper.xpt
+ @BINPATH@/components/embed_base.xpt
+ @BINPATH@/components/windowds.xpt
+ @BINPATH@/components/dom_xpath.xpt
+ @BINPATH@/components/lwbrk.xpt
+ @BINPATH@/components/nsINIProcessor.js
+ @BINPATH@/components/nsINIProcessor.manifest
+
