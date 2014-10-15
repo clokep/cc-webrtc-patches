@@ -1,0 +1,176 @@
+# HG changeset patch
+# Parent 9b74fec9a9a60ef75f3806fe63fec7fe398a8c8f
+# User Mayank Kumar <mayanktg@gmail.com>
+
+diff --git a/chat/protocols/xmpp/moz.build b/chat/protocols/xmpp/moz.build
+--- a/chat/protocols/xmpp/moz.build
++++ b/chat/protocols/xmpp/moz.build
+@@ -1,13 +1,15 @@
+ # vim: set filetype=python:
+ # This Source Code Form is subject to the terms of the Mozilla Public
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
++XPCSHELL_TESTS_MANIFESTS += ['test/xpcshell.ini']
++
+ EXTRA_COMPONENTS += [
+     'xmpp.js',
+     'xmpp.manifest',
+ ]
+ 
+ EXTRA_JS_MODULES += [
+     'xmpp-authmechs.jsm',
+     'xmpp-jingle.jsm',
+diff --git a/chat/protocols/xmpp/test/test_sdpOffer.js b/chat/protocols/xmpp/test/test_sdpOffer.js
+new file mode 100644
+--- /dev/null
++++ b/chat/protocols/xmpp/test/test_sdpOffer.js
+@@ -0,0 +1,124 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++Components.utils.import("resource:///modules/imXPCOMUtils.jsm");
++Components.utils.import("resource://gre/modules/Services.jsm");
++Components.utils.import("resource:///modules/xmpp-jingle.jsm");
++Components.utils.import("resource:///modules/xmpp-xml.jsm");
++
++let sdp = ['v=0',
++           'o=Mozilla-SIPUA-1.6a1pre 27638 0 IN IP4 0.0.0.0',
++           's=SIP Call',
++           't=0 0',
++           'a=ice-ufrag:0c838e8e',
++           'a=ice-pwd:1ef8fe1ef670d3dd89098b03dac4b4ed',
++           'a=fingerprint:sha-256 2B:6E:6A:8D:4C:25:FC:CC:11:D8:8E:9C:28:A0:5A:FA:AD:84:C6:11:24:0A:36:0B:FB:3A:14:95:F1:BD:BB:06',
++           'm=audio 43021 RTP/SAVPF 109 0 8 101',
++           'c=IN IP4 106.51.45.18',
++           'a=rtpmap:109 opus/48000/2',
++           'a=ptime:20',
++           'a=rtpmap:0 PCMU/8000',
++           'a=rtpmap:8 PCMA/8000',
++           'a=rtpmap:101 telephone-event/8000',
++           'a=fmtp:101 0-15',
++           'a=sendrecv',
++           'a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level',
++           'a=setup:actpass',
++           'a=candidate:0 1 UDP 2122252543 106.51.45.18 60055 typ host',
++           'a=candidate:2 1 UDP 2122187007 192.168.150.1 43021 typ host',
++           'a=candidate:3 1 UDP 1686044671 106.51.45.18 43021 typ srflx raddr 192.168.150.1 rport 43021',
++           'a=candidate:0 2 UDP 2122252542 106.51.45.18 52974 typ host',
++           'a=candidate:2 2 UDP 2122187006 192.168.150.1 43127 typ host',
++           'a=candidate:3 2 UDP 1686044670 106.51.45.18 43127 typ srflx raddr 192.168.150.1 rport 43127',
++           'a=rtcp-mux',
++           'm=video 33680 RTP/SAVPF 120',
++           'c=IN IP4 106.51.45.18',
++           'a=rtpmap:120 VP8/90000',
++           'a=sendrecv',
++           'a=rtcp-fb:120 nack',
++           'a=rtcp-fb:120 nack pli',
++           'a=rtcp-fb:120 ccm fir',
++           'a=setup:actpass',
++           'a=candidate:0 1 UDP 2122252543 106.51.45.18 52180 typ host',
++           'a=candidate:2 1 UDP 2122187007 192.168.150.1 33680 typ host',
++           'a=candidate:3 1 UDP 1686044671 106.51.45.18 33680 typ srflx raddr 192.168.150.1 rport 33680',
++           'a=candidate:0 2 UDP 2122252542 106.51.45.18 39777 typ host',
++           'a=candidate:2 2 UDP 2122187006 192.168.150.1 32815 typ host',
++           'a=candidate:3 2 UDP 1686044670 106.51.45.18 32815 typ srflx raddr 192.168.150.1 rport 32815',
++           'a=rtcp-mux'];
++sdp = sdp.join("\r\n");
++
++let xml1 = ['<content creator="initiator" name="voice">',
++            ' <description xmlns="urn:xmpp:jingle:apps:rtp:1" media="audio" setup="actpass">',
++            '  <rtp-hdrext xmlns="urn:xmpp:jingle:apps:rtp:rtp-hdrext:0" id="1" uri="urn:ietf:params:rtp-hdrext:ssrc-audio-level"/>',
++            '  <payload-type id="109" name="opus" clockrate="48000" channels="2">',
++            '   <parameter ptime="20"/>',
++            '  </payload-type>',
++            '  <payload-type id="0" name="PCMU" clockrate="8000"/>',
++            '  <payload-type id="8" name="PCMA" clockrate="8000"/>',
++            '  <payload-type id="101" name="telephone-event" clockrate="8000">',
++            '   <parameter value="0-15"/>',
++            '  </payload-type>',
++            ' </description>',
++            ' <transport xmlns="urn:xmpp:jingle:transports:ice-udp:1" ufrag="0c838e8e" pwd="1ef8fe1ef670d3dd89098b03dac4b4ed">',
++            '  <fingerprint xmlns="urn:xmpp:jingle:apps:dtls:0" hash="sha-256">',
++            '   2B:6E:6A:8D:4C:25:FC:CC:11:D8:8E:9C:28:A0:5A:FA:AD:84:C6:11:24:0A:36:0B:FB:3A:14:95:F1:BD:BB:06',
++            '  </fingerprint>',
++            '  <candidate component="0" foundation="1" protocol="UDP" priority="2122252543" ip="106.51.45.18" port="60055" type="host"/>',
++            '  <candidate component="2" foundation="1" protocol="UDP" priority="2122187007" ip="192.168.150.1" port="43021" type="host"/>',
++            '  <candidate component="3" foundation="1" protocol="UDP" priority="1686044671" ip="106.51.45.18" port="43021" type="srflx" reladdr="192.168.150.1" relport="43021"/>',
++            '  <candidate component="0" foundation="2" protocol="UDP" priority="2122252542" ip="106.51.45.18" port="52974" type="host"/>',
++            '  <candidate component="2" foundation="2" protocol="UDP" priority="2122187006" ip="192.168.150.1" port="43127" type="host"/>',
++            '  <candidate component="3" foundation="2" protocol="UDP" priority="1686044670" ip="106.51.45.18" port="43127" type="srflx" reladdr="192.168.150.1" relport="43127"/>',
++            ' </transport>',
++            '</content>',
++            ''];
++xml1 = xml1.join("\n");
++
++let xml2 = ['<content creator="initiator" name="face">',
++            ' <description xmlns="urn:xmpp:jingle:apps:rtp:1" media="video" setup="actpass">',
++            '  <payload-type id="120" name="VP8" clockrate="90000">',
++            '   <rtcp-fb xmlns="urn:xmpp:jingle:apps:rtp:rtcp-fb:0" type="nack"/>',
++            '   <rtcp-fb xmlns="urn:xmpp:jingle:apps:rtp:rtcp-fb:0" type="nack" subtype="pli"/>',
++            '   <rtcp-fb xmlns="urn:xmpp:jingle:apps:rtp:rtcp-fb:0" type="ccm" subtype="fir"/>',
++            '  </payload-type>',
++            ' </description>',
++            ' <transport xmlns="urn:xmpp:jingle:transports:ice-udp:1" ufrag="0c838e8e" pwd="1ef8fe1ef670d3dd89098b03dac4b4ed">',
++            '  <fingerprint xmlns="urn:xmpp:jingle:apps:dtls:0" hash="sha-256">',
++            '   2B:6E:6A:8D:4C:25:FC:CC:11:D8:8E:9C:28:A0:5A:FA:AD:84:C6:11:24:0A:36:0B:FB:3A:14:95:F1:BD:BB:06',
++            '  </fingerprint>',
++            '  <candidate component="0" foundation="1" protocol="UDP" priority="2122252543" ip="106.51.45.18" port="52180" type="host"/>',
++            '  <candidate component="2" foundation="1" protocol="UDP" priority="2122187007" ip="192.168.150.1" port="33680" type="host"/>',
++            '  <candidate component="3" foundation="1" protocol="UDP" priority="1686044671" ip="106.51.45.18" port="33680" type="srflx" reladdr="192.168.150.1" relport="33680"/>',
++            '  <candidate component="0" foundation="2" protocol="UDP" priority="2122252542" ip="106.51.45.18" port="39777" type="host"/>',
++            '  <candidate component="2" foundation="2" protocol="UDP" priority="2122187006" ip="192.168.150.1" port="32815" type="host"/>',
++            '  <candidate component="3" foundation="2" protocol="UDP" priority="1686044670" ip="106.51.45.18" port="32815" type="srflx" reladdr="192.168.150.1" relport="32815"/>',
++            ' </transport>',
++            '</content>',
++            ''];
++xml2 = xml2.join("\n");
++
++function run_test() {
++  add_test(test_sdp2xml);
++  add_test(test_xml2sdp);
++  run_next_test();
++}
++
++function test_sdp2xml() {
++  let xml  = [xml1, xml2];
++  let offer = jingle.sdp2xml(sdp);
++
++  for (i = 0; i < sdp.match(/m=/g).length; ++i) {
++    offer[i] = offer[i].convertToString();
++    do_check_eq(offer[i], xml[i]);
++  }
++  run_next_test();
++}
++
++function test_xml2sdp() {
++  let offer = jingle.sdp2xml(sdp);
++  let sdpOffer = jingle.xml2sdp(offer);
++  do_check_eq(sdp, sdpOffer);
++  run_next_test();
++}
+diff --git a/chat/protocols/xmpp/test/xpcshell.ini b/chat/protocols/xmpp/test/xpcshell.ini
+new file mode 100644
+--- /dev/null
++++ b/chat/protocols/xmpp/test/xpcshell.ini
+@@ -0,0 +1,5 @@
++[DEFAULT]
++head =
++tail =
++
++[test_sdpOffer.js]
+diff --git a/im/test/xpcshell.ini b/im/test/xpcshell.ini
+--- a/im/test/xpcshell.ini
++++ b/im/test/xpcshell.ini
+@@ -1,9 +1,10 @@
+ ; This Source Code Form is subject to the terms of the Mozilla Public
+ ; License, v. 2.0. If a copy of the MPL was not distributed with this
+ ; file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ [include:chat/modules/test/xpcshell.ini]
+ [include:chat/components/src/test/xpcshell.ini]
+ [include:chat/protocols/irc/test/xpcshell.ini]
+ [include:chat/protocols/yahoo/test/xpcshell.ini]
++[include:chat/protocols/xmpp/test/xpcshell.ini]
+ [include:extensions/purple/purplexpcom/src/test/xpcshell.ini]
