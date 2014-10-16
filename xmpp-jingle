@@ -4,7 +4,7 @@
 diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jingle.jsm
 --- a/chat/protocols/xmpp/xmpp-jingle.jsm
 +++ b/chat/protocols/xmpp/xmpp-jingle.jsm
-@@ -3,214 +3,154 @@
+@@ -3,214 +3,155 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  const EXPORTED_SYMBOLS = ["Jingle"];
@@ -198,7 +198,8 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 +          if (values.length >= 3)
 +            attr.channels = values[2];
 +
-+          description.addChild(Stanza.node("payload-type", null, attr));
++          lastPayload = Stanza.node("payload-type", null, attr);
++          description.addChild(lastPayload);
          }
 -        /* Payload-type node is child of description node. This attribute
 -         * maps from an RTP payload type number (as used in an "m=" line)
@@ -311,7 +312,7 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
  
    xml2sdp: function xml2sdp(aXmlOffer) {
      if (aXmlOffer.length === 0)
-@@ -242,19 +182,23 @@
+@@ -242,19 +183,23 @@
                 eleFingerprint.innerText);
      }
  
