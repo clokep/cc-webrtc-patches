@@ -1,4 +1,5 @@
 # HG changeset patch
+# Parent 9b74fec9a9a60ef75f3806fe63fec7fe398a8c8f
 # User Patrick Cloke <clokep@gmail.com>
 # Date 1413406079 14400
 #      Wed Oct 15 16:47:59 2014 -0400
@@ -60,7 +61,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
                <xul:label class="conv-nicklist-header-label"
                           anonid="participantLabel"
                           value="&chat.participants;"/>
-@@ -262,16 +272,270 @@
+@@ -262,16 +272,279 @@
              if (conv.isChat && aMsg.containsNick)
                this.tab.setAttribute("attention", "true");
              this.tab.setAttribute("unread", "true");
@@ -130,12 +131,16 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +          let pc = this.initPeerConnection();
 +          this.getVideo(() => {
 +            pc.createOffer(offer => {
-+              pc.setLocalDescription(offer, () => {
-+                if (this._conv)
-+                  this._conv.webrtcCall("session-initiate", offer.sdp);
-+                this.ongoingCall = true;
-+              }, () => fail("LocalDesc"));
++              pc.setLocalDescription(offer, () => {}, () => fail("LocalDesc"));
 +            }, () => fail("Offer"));
++            pc.onicecandidate = event => {
++              if (event.candidate)
++                return;
++              pc.onicecandidate = null;
++              if (this._conv)
++                this._conv.webrtcCall("session-initiate", pc.localDescription.sdp);
++              this.ongoingCall = true;
++            };
 +          }, () => fail("Video"));
 +
 +          // Display call wait notification until call is answered.
@@ -235,13 +240,18 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +          pc.setRemoteDescription(offer, () => {
 +            this.getVideo(() => {
 +              pc.createAnswer(answer => {
-+                pc.setLocalDescription(answer, () => {
-+                  if (this._conv)
-+                    this._conv.webrtcCall("session-accept", answer.sdp);
-+                  this.getElt("videoCallBox").removeAttribute("hidden");
-+                  this.ongoingCall = true;
-+                }, () => fail("LocalDesc"));
++                pc.setLocalDescription(answer, () => {}, () => fail("LocalDesc"));
 +              }, () => fail("Answer"));
++
++              pc.onicecandidate = event => {
++                if (event.candidate)
++                  return;
++                pc.onicecandidate = null;
++
++                if (this._conv)
++                  this._conv.webrtcCall("session-accept", pc.localDescription.sdp);
++                this.ongoingCall = true;
++              };
 +            }, () => fail("Video"));
 +          }, () => fail("RemoteDesc"));
 +        ]]>
@@ -331,7 +341,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
              return;
  
            let account = this._conv.account;
-@@ -1732,22 +1996,59 @@
+@@ -1732,22 +2005,59 @@
              cti.setAttribute("statusMessage", statusString + statusText);
              cti.setAttribute("status", Status.toAttribute(statusType));
              cti.setAttribute("statusTypeTooltiptext", statusString);
@@ -392,7 +402,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
            targetSwitcher.setAttribute("image",
                                        account.protocol.iconBaseURI + "icon.png");
            let targetTooltip =
-@@ -1755,16 +2056,17 @@
+@@ -1755,16 +2065,17 @@
                                               [this._conv.title,
                                                account.name,
                                                account.protocol.name], 3);
@@ -410,7 +420,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
              this.tab.setAttribute("chat", "true");
              this.tab.setAttribute("prpl", this._conv.account.protocol.id);
  
-@@ -1852,16 +2154,17 @@
+@@ -1852,16 +2163,17 @@
              break;
  
            case "replying-to-prompt":
@@ -428,7 +438,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
            case "update-buddy-icon":
            case "update-conv-chatleft":
            case "update-conv-chatjoining":
-@@ -1892,16 +2195,30 @@
+@@ -1892,16 +2204,30 @@
              this.updateTopic();
              break;
  
@@ -585,7 +595,7 @@ diff --git a/im/themes/conversation.css b/im/themes/conversation.css
  .status-overlay-icon[status="idle"] {
    list-style-image: url('chrome://chat/skin/idle.png');
  }
-@@ -399,8 +431,69 @@ grippy {
+@@ -399,8 +431,69 @@
  .conv-nicklist:focus > .listitem-iconic[inactive][selected] > .listcell-iconic > .listcell-label {
    color: HighlightText !important;
  }
@@ -658,7 +668,7 @@ diff --git a/im/themes/conversation.css b/im/themes/conversation.css
 diff --git a/im/themes/jar.mn b/im/themes/jar.mn
 --- a/im/themes/jar.mn
 +++ b/im/themes/jar.mn
-@@ -30,24 +30,26 @@ instantbird.jar:
+@@ -30,24 +30,26 @@
  *	skin/classic/instantbird/viewlog.css
  	skin/classic/instantbird/newMessage.png
  	skin/classic/instantbird/expand.png
@@ -685,7 +695,7 @@ diff --git a/im/themes/jar.mn b/im/themes/jar.mn
  #else
  	skin/classic/instantbird/tag.png    (tag-win.png)
  	skin/classic/instantbird/actionicon-tab.png    (actionicon-tab-win.png)
-@@ -133,16 +135,17 @@ instantbird.jar:
+@@ -133,16 +135,17 @@
  *	skin/classic/aero/instantbird/viewlog.css
  	skin/classic/aero/instantbird/newMessage.png
  	skin/classic/aero/instantbird/expand.png
@@ -705,7 +715,7 @@ diff --git a/im/themes/jar.mn b/im/themes/jar.mn
  	skin/classic/aero/instantbird/preferences/applications.css   (preferences-winstripe/applications.css)
 diff --git a/im/themes/webRTC-sharingDevice-16.png b/im/themes/webRTC-sharingDevice-16.png
 new file mode 100644
-index 0000000000000000000000000000000000000000..b7ab6f053df24ca3fcb8e55f394617db181a8558
+index e69de29bb2d1d6434b8b29ae775ad8c2e48c5391..b7ab6f053df24ca3fcb8e55f394617db181a8558
 GIT binary patch
 literal 3856
 zc${^Y2{@GN7r+N4SwohrW65rYVeEz&G<K1-?1Qn*FvD0YYe*s62+39?bS>Fs$-ZPQ
@@ -777,7 +787,7 @@ Py?YQ^hVU{C`|$q(x0=At
 
 diff --git a/im/themes/webRTC-sharingDevice-16@2x.png b/im/themes/webRTC-sharingDevice-16@2x.png
 new file mode 100644
-index 0000000000000000000000000000000000000000..cf1dd9ab6379291d393d4536195ba0af1bcdff28
+index e69de29bb2d1d6434b8b29ae775ad8c2e48c5391..cf1dd9ab6379291d393d4536195ba0af1bcdff28
 GIT binary patch
 literal 4020
 zc${^Y2|Scr8^C8&_I<mJ>uRi#%rKLs$tZ?U%-9Vs8H@~LX3R`xj5V@WRH7_py^Kiq

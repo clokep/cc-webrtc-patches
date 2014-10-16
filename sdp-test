@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 9b74fec9a9a60ef75f3806fe63fec7fe398a8c8f
+# Parent 96dbfa5621b6ac35e1b0e07c636be7cc5ff48686
 # User Mayank Kumar <mayanktg@gmail.com>
 
 diff --git a/chat/protocols/xmpp/moz.build b/chat/protocols/xmpp/moz.build
@@ -25,7 +25,7 @@ diff --git a/chat/protocols/xmpp/test/test_sdpOffer.js b/chat/protocols/xmpp/tes
 new file mode 100644
 --- /dev/null
 +++ b/chat/protocols/xmpp/test/test_sdpOffer.js
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,121 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -74,8 +74,7 @@ new file mode 100644
 +           'a=candidate:0 2 UDP 2122252542 106.51.45.18 39777 typ host',
 +           'a=candidate:2 2 UDP 2122187006 192.168.150.1 32815 typ host',
 +           'a=candidate:3 2 UDP 1686044670 106.51.45.18 32815 typ srflx raddr 192.168.150.1 rport 32815',
-+           'a=rtcp-mux'];
-+sdp = sdp.join("\r\n");
++           'a=rtcp-mux'].join("\r\n");
 +
 +let xml1 = ['<content creator="initiator" name="voice">',
 +            ' <description xmlns="urn:xmpp:jingle:apps:rtp:1" media="audio" setup="actpass">',
@@ -101,8 +100,7 @@ new file mode 100644
 +            '  <candidate component="3" foundation="2" protocol="UDP" priority="1686044670" ip="106.51.45.18" port="43127" type="srflx" reladdr="192.168.150.1" relport="43127"/>',
 +            ' </transport>',
 +            '</content>',
-+            ''];
-+xml1 = xml1.join("\n");
++            ''].join("\n");
 +
 +let xml2 = ['<content creator="initiator" name="face">',
 +            ' <description xmlns="urn:xmpp:jingle:apps:rtp:1" media="video" setup="actpass">',
@@ -124,8 +122,7 @@ new file mode 100644
 +            '  <candidate component="3" foundation="2" protocol="UDP" priority="1686044670" ip="106.51.45.18" port="32815" type="srflx" reladdr="192.168.150.1" relport="32815"/>',
 +            ' </transport>',
 +            '</content>',
-+            ''];
-+xml2 = xml2.join("\n");
++            ''].join("\n");
 +
 +function run_test() {
 +  add_test(test_sdp2xml);
@@ -135,9 +132,9 @@ new file mode 100644
 +
 +function test_sdp2xml() {
 +  let xml  = [xml1, xml2];
-+  let offer = jingle.sdp2xml(sdp);
++  let offer = Jingle.sdp2xml(sdp);
 +
-+  for (i = 0; i < sdp.match(/m=/g).length; ++i) {
++  for (let i = 0; i < sdp.match(/m=/g).length; ++i) {
 +    offer[i] = offer[i].convertToString();
 +    do_check_eq(offer[i], xml[i]);
 +  }
@@ -145,8 +142,8 @@ new file mode 100644
 +}
 +
 +function test_xml2sdp() {
-+  let offer = jingle.sdp2xml(sdp);
-+  let sdpOffer = jingle.xml2sdp(offer);
++  let offer = Jingle.sdp2xml(sdp);
++  let sdpOffer = Jingle.xml2sdp(offer);
 +  do_check_eq(sdp, sdpOffer);
 +  run_next_test();
 +}
