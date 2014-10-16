@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 2a99fdb46c1feac1de1c01d879a6244351904e45
+# Parent df2b37118b36092ca71f3ac2ed17dd732750a725
 # User Patrick Cloke <clokep@gmail.com>
-# Date 1413406089 14400
+# Date 1413472755 14400
 #      Wed Oct 15 15:40:34 2014 -0400
 Bug 1018060: Implement voice call support in Instantbird using webRTC.
 
 diff --git a/chat/components/public/prplIConversation.idl b/chat/components/public/prplIConversation.idl
 --- a/chat/components/public/prplIConversation.idl
 +++ b/chat/components/public/prplIConversation.idl
-@@ -69,19 +69,25 @@ interface prplIConversation: nsISupports
+@@ -69,19 +69,30 @@ interface prplIConversation: nsISupports
    /* Method to add or remove an observer */
    void addObserver(in nsIObserver aObserver);
    void removeObserver(in nsIObserver aObserver);
@@ -21,7 +21,12 @@ diff --git a/chat/components/public/prplIConversation.idl b/chat/components/publ
 +[scriptable, uuid(c3a50563-9090-413f-933f-441e9615f585)]
  interface prplIConvIM: prplIConversation {
  
-+  /* Send a SDP offer/answer when user makes/answers a video call */
++  void initiateCall();
++
++  void acceptCall()
++
++  /* Send a SDP offer/answer when user makes/answers a video call. aType can be
++   * either session-initiate or session-accept. */
 +  void webrtcCall(in AUTF8String aType, in AUTF8String aOffer);
 +
 +  /* Terminate a video call */
@@ -537,7 +542,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
  /* This is an ordered list, used to determine chat buddy flags:
   *  index < member    -> noFlags
   *  index = member    -> voiced
-@@ -274,16 +276,53 @@ const XMPPConversationPrototype = {
+@@ -274,16 +276,50 @@ const XMPPConversationPrototype = {
        flags = {incoming: true, _alias: this.buddy.contactDisplayName};
      if (aDate) {
        flags.time = aDate / 1000;
@@ -551,6 +556,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
 +    if (!aType)
 +      return;
 +
++    // TODO There can probably be more than one call per account!
 +    if (aType == "session-initiate")
 +      this._account._callSid = this._account.generateId();
 +
@@ -558,27 +564,23 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
 +                           {xmlns: Stanza.NS.jingle,
 +                            action: aType,
 +                            initiator: this._account._connection._jid.jid,
-+                            sid: this._account._callSid});
-+
-+    let iqContent = Jingle.sdp2xml(aOffer);
-+
-+    for (let contentNode of iqContent)
-+      item.addChild(contentNode);
++                            sid: this._account._callSid},
++                            Jingle.sdp2xml(aOffer));
 +
 +    this._account.sendStanza(Stanza.iq("set", null, this.to, item));
 +  },
 +
-+  /* called the the user wants to disconnect call. */
++  /* Called when the user wants to disconnect call. */
 +  endCall: function() {
++    let reason = Stanza.node("reason", null);
++    reason.addChild(Stanza.node("success", null));
++    reason.addChild(Stanza.node("text", null, null, "Call disconnected"));
++
 +    let item = Stanza.node("jingle", null,
 +                           {xmlns: Stanza.NS.jingle,
 +                            action: "session-terminate",
 +                            initiator: this._account._connection._jid.jid,
-+                            sid: this._account._callSid});
-+    let reason = Stanza.node("reason", null);
-+    reason.addChild(Stanza.node("success", null));
-+    reason.addChild(Stanza.node("text", null, null, "Call disconnected"));
-+    item.addChild(reason);
++                            sid: this._account._callSid}, reason);
 +
 +    this._account.sendStanza(Stanza.iq("set", null, this.to, item));
 +  },
@@ -591,7 +593,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
    unInit: function() {
      this._account.removeConversation(this.buddy.normalizedName);
      delete this.buddy;
-@@ -816,32 +855,57 @@ const XMPPAccountPrototype = {
+@@ -816,32 +852,59 @@ const XMPPAccountPrototype = {
        for each (let qe in aStanza.getChildren("query")) {
          if (qe.uri != Stanza.NS.roster)
            continue;
@@ -601,25 +603,27 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
          return;
        }
 +
-+      let jStanza = aStanza.getElement(["jingle"]);
-+      let stanzaAction = jStanza.attributes["action"];
++      let jingle = aStanza.getElement(["jingle"]);
++      if (jingle) {
++        let action = jingle.attributes["action"];
 +
-+      if (jStanza && stanzaAction) {
-+        let conversation =
-+          this.createConversation(this.normalize(aStanza.attributes["from"]));
-+        let contentNodes = jStanza.getElements(["content"]);
++        if (action) {
++          let conversation =
++            this.createConversation(this.normalize(aStanza.attributes["from"]));
++          let contentNodes = jingle.getElements(["content"]);
 +
-+        if ((stanzaAction == "session-initiate" ||
-+             stanzaAction == "session-accept") && contentNodes.length > 0) {
-+          this._callSid = jStanza.attributes["sid"];
-+          let sdp = Jingle.xml2sdp(contentNodes);
-+          let aTopic = stanzaAction == "session-initiate" ?
-+                       "webrtc-call-offer" : "webrtc-call-answer";
-+          conversation.notifyObservers(this, aTopic, sdp);
-+        }
-+        else if (stanzaAction == "session-terminate") {
-+          if (jStanza.attributes["sid"] == this._callSid)
-+            conversation.notifyObservers(this, "call-disconnect");
++          if ((action == "session-initiate" ||
++               action == "session-accept") && contentNodes.length > 0) {
++            this._callSid = jingle.attributes["sid"];
++            let sdp = Jingle.xml2sdp(contentNodes);
++            let topic = action == "session-initiate" ?
++                        "webrtc-call-offer" : "webrtc-call-answer";
++            conversation.notifyObservers(this, topic, sdp);
++          }
++          else if (action == "session-terminate") {
++            if (jingle.attributes["sid"] == this._callSid)
++              conversation.notifyObservers(this, "call-disconnect");
++          }
 +        }
 +      }
      }
