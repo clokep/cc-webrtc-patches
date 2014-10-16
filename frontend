@@ -61,7 +61,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
                <xul:label class="conv-nicklist-header-label"
                           anonid="participantLabel"
                           value="&chat.participants;"/>
-@@ -262,16 +272,279 @@
+@@ -262,16 +272,280 @@
              if (conv.isChat && aMsg.containsNick)
                this.tab.setAttribute("attention", "true");
              this.tab.setAttribute("unread", "true");
@@ -250,6 +250,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +
 +                if (this._conv)
 +                  this._conv.webrtcCall("session-accept", pc.localDescription.sdp);
++                this.getElt("videoCallBox").removeAttribute("hidden");
 +                this.ongoingCall = true;
 +              };
 +            }, () => fail("Video"));
@@ -341,7 +342,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
              return;
  
            let account = this._conv.account;
-@@ -1732,22 +2005,59 @@
+@@ -1732,22 +2006,59 @@
              cti.setAttribute("statusMessage", statusString + statusText);
              cti.setAttribute("status", Status.toAttribute(statusType));
              cti.setAttribute("statusTypeTooltiptext", statusString);
@@ -402,7 +403,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
            targetSwitcher.setAttribute("image",
                                        account.protocol.iconBaseURI + "icon.png");
            let targetTooltip =
-@@ -1755,16 +2065,17 @@
+@@ -1755,16 +2066,17 @@
                                               [this._conv.title,
                                                account.name,
                                                account.protocol.name], 3);
@@ -420,7 +421,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
              this.tab.setAttribute("chat", "true");
              this.tab.setAttribute("prpl", this._conv.account.protocol.id);
  
-@@ -1852,16 +2163,17 @@
+@@ -1852,16 +2164,17 @@
              break;
  
            case "replying-to-prompt":
@@ -438,7 +439,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
            case "update-buddy-icon":
            case "update-conv-chatleft":
            case "update-conv-chatjoining":
-@@ -1892,16 +2204,30 @@
+@@ -1892,16 +2205,30 @@
              this.updateTopic();
              break;
  
