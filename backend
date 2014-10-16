@@ -1,14 +1,14 @@
 # HG changeset patch
 # Parent df2b37118b36092ca71f3ac2ed17dd732750a725
 # User Patrick Cloke <clokep@gmail.com>
-# Date 1413474465 14400
+# Date 1413479350 14400
 #      Wed Oct 15 15:40:34 2014 -0400
 Bug 1018060: Implement voice call support in Instantbird using webRTC.
 
 diff --git a/chat/components/public/prplIConversation.idl b/chat/components/public/prplIConversation.idl
 --- a/chat/components/public/prplIConversation.idl
 +++ b/chat/components/public/prplIConversation.idl
-@@ -69,19 +69,32 @@ interface prplIConversation: nsISupports
+@@ -69,18 +69,32 @@ interface prplIConversation: nsISupports
    /* Method to add or remove an observer */
    void addObserver(in nsIObserver aObserver);
    void removeObserver(in nsIObserver aObserver);
@@ -20,11 +20,12 @@ diff --git a/chat/components/public/prplIConversation.idl b/chat/components/publ
 -[scriptable, uuid(0c072a80-103a-4992-b249-8e442b5f0d46)]
 +[scriptable, uuid(c3a50563-9090-413f-933f-441e9615f585)]
  interface prplIConvIM: prplIConversation {
- 
-+  /* Send a SDP offer when user makes a call */
++  /* Send a SDP offer when user makes a call.
++   * TODO Pass the mozRTCSessionDescription directly, but this is in webidl.*/
 +  void initiateCall(in AUTF8String aOffer);
 +
-+  /* Send a SDP answer when a user accepts an incoming video call */
++  /* Send a SDP answer when a user accepts an incoming video call.
++   * TODO Pass the mozRTCSessionDescription directly, but this is in webidl. */
 +  void acceptCall(in AUTF8String aAnswer);
 +
 +  /* Send a SDP offer/answer when user makes/answers a video call. aType can be
@@ -33,7 +34,7 @@ diff --git a/chat/components/public/prplIConversation.idl b/chat/components/publ
 +
 +  /* Terminate a video call */
 +  void endCall();
-+
+ 
    /* The buddy at the remote end of the conversation */
    readonly attribute imIAccountBuddy buddy;
  
@@ -41,11 +42,10 @@ diff --git a/chat/components/public/prplIConversation.idl b/chat/components/publ
    const short NOT_TYPING = 0;
  
    /* The remote buddy is currently typing */
-   const short TYPING = 1;
 diff --git a/chat/components/src/imConversations.js b/chat/components/src/imConversations.js
 --- a/chat/components/src/imConversations.js
 +++ b/chat/components/src/imConversations.js
-@@ -430,16 +430,18 @@ UIConversation.prototype = {
+@@ -430,16 +430,19 @@ UIConversation.prototype = {
        }
      }
    },
@@ -54,7 +54,8 @@ diff --git a/chat/components/src/imConversations.js b/chat/components/src/imConv
    get buddy() this.target.buddy,
    get typingState() this.target.typingState,
    sendTyping: function(aString) this.target.sendTyping(aString),
-+  webrtcCall: function(aType, aOffer) this.target.webrtcCall(aType, aOffer),
++  initiateCall: function(aOffer) this.target.initiateCall(aOffer),
++  acceptCall: function(aOffer) this.target.acceptCall(aOffer),
 +  endCall: function() this.target.endCall(),
  
    // Chat only
@@ -64,6 +65,28 @@ diff --git a/chat/components/src/imConversations.js b/chat/components/src/imConv
    get topicSetter() this.target.topicSetter,
    get topicSettable() this.target.topicSettable,
    get noTopicString() bundle.GetStringFromName("noTopic"),
+diff --git a/chat/content/convbrowser.xml b/chat/content/convbrowser.xml
+--- a/chat/content/convbrowser.xml
++++ b/chat/content/convbrowser.xml
+@@ -76,17 +76,17 @@
+ 
+       <property name="currentURI"
+                 onget="return this.webNavigation.currentURI;"
+                 readonly="true"/>
+ 
+       <field name="_docShell">null</field>
+ 
+       <property name="docShell"
+-                onget="return this._docShell || (this._docShell = this.boxObject.docShell);"
++                onget="return this._docShell || (this._docShell = this.boxObject.QueryInterface(Components.interfaces.nsIContainerBoxObject).docShell);"
+                 readonly="true"/>
+ 
+       <field name="_webNavigation">null</field>
+ 
+       <property name="webNavigation"
+                 onget="return this._webNavigation || (this._webNavigation = this.docShell.QueryInterface(Components.interfaces.nsIWebNavigation));"
+                 readonly="true"/>
+ 
 diff --git a/chat/modules/jsProtoHelper.jsm b/chat/modules/jsProtoHelper.jsm
 --- a/chat/modules/jsProtoHelper.jsm
 +++ b/chat/modules/jsProtoHelper.jsm
