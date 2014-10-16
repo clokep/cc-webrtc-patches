@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 9b74fec9a9a60ef75f3806fe63fec7fe398a8c8f
+# Parent 4d153d3932fbfc84d46a4762b14790cd38ed4404
 # User Patrick Cloke <clokep@gmail.com>
-# Date 1413406079 14400
+# Date 1413430414 14400
 #      Wed Oct 15 16:47:59 2014 -0400
 Bug 1018060: Implement voice call support in Instantbird using webRTC, UI part.
 
@@ -410,7 +410,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
            targetSwitcher.setAttribute("tooltiptext", targetTooltip);
            let targetPopup = document.createElement("menupopup");
            targetPopup.classList.add("all-targets-popup");
-           targetPopup.setAttribute("postion", "after_end");
+           targetPopup.setAttribute("position", "after_end");
            targetSwitcher.appendChild(targetPopup);
 +          let cti = this.getElt("conv-top-info");
            cti.appendChild(targetSwitcher);
@@ -596,7 +596,7 @@ diff --git a/im/themes/conversation.css b/im/themes/conversation.css
  .status-overlay-icon[status="idle"] {
    list-style-image: url('chrome://chat/skin/idle.png');
  }
-@@ -399,8 +431,69 @@
+@@ -399,8 +431,69 @@ grippy {
  .conv-nicklist:focus > .listitem-iconic[inactive][selected] > .listcell-iconic > .listcell-label {
    color: HighlightText !important;
  }
@@ -669,7 +669,7 @@ diff --git a/im/themes/conversation.css b/im/themes/conversation.css
 diff --git a/im/themes/jar.mn b/im/themes/jar.mn
 --- a/im/themes/jar.mn
 +++ b/im/themes/jar.mn
-@@ -30,24 +30,26 @@
+@@ -30,24 +30,26 @@ instantbird.jar:
  *	skin/classic/instantbird/viewlog.css
  	skin/classic/instantbird/newMessage.png
  	skin/classic/instantbird/expand.png
@@ -696,7 +696,7 @@ diff --git a/im/themes/jar.mn b/im/themes/jar.mn
  #else
  	skin/classic/instantbird/tag.png    (tag-win.png)
  	skin/classic/instantbird/actionicon-tab.png    (actionicon-tab-win.png)
-@@ -133,16 +135,17 @@
+@@ -133,16 +135,17 @@ instantbird.jar:
  *	skin/classic/aero/instantbird/viewlog.css
  	skin/classic/aero/instantbird/newMessage.png
  	skin/classic/aero/instantbird/expand.png
