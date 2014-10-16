@@ -1,0 +1,337 @@
+# HG changeset patch
+# Parent 57ac0341c938934a73385b73b72aaacef1bc7d32
+
+diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jingle.jsm
+--- a/chat/protocols/xmpp/xmpp-jingle.jsm
++++ b/chat/protocols/xmpp/xmpp-jingle.jsm
+@@ -3,214 +3,154 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ const EXPORTED_SYMBOLS = ["Jingle"];
+ 
+ Components.utils.import("resource:///modules/xmpp-xml.jsm");
+ 
+ const Jingle = {
+   sdp2xml: function sdp2xml(aOffer) {
+-    // NOTE: The SDP offer folows the RFC-4566: Session Description Protocol.
++    // NOTE: The SDP offer follows the RFC-4566: Session Description Protocol.
+     // Using XEP-0320: Jingle RTP Session.
+ 
+-    // This is the output variable which contains the array of content node to
+-    // be sent with Jingle stanza.
+-    let contentNodes = [];
+-
+     // SDP session description consists of a session-level section followed by
+     // zero or more media-level sections.
+-    let sessionDesc = aOffer.split("m=");
+-
+-    /* "ice-ufrag" and "ice-pwd" attributes convey the username fragment and
+-     * password used by ICE for message integrity. See RFC 5245, Section 15.4.
+-     * e.g. [a=ice-ufrag:0c838e8e]
+-     */
+-    let ufrag;
+-    // eg. [a=ice-pwd:1ef8fe1ef670d3dd89098b03dac4b4ed]
+-    let pwd;
+-    /* The fingerprint is the result of a hash function of the certificates
+-     * used in the DTLS-SRTP negotiation. This line creates a binding between
+-     * the signaling and the certificates used in DTLS.
+-     * e.g. [a=fingerprint:sha-256 2B:6E:6A:8D:...]
+-     */
+-    let shaHash;
+-    let fingerprintData;
++    let sections = aOffer.split("m=");
+ 
+     // The session-level section contains the version, user name, type of call,
+     // timestamp, ufrag, password, fingerprint and other attributes.
+-    let headerLines = sessionDesc[0].split("\r\n");
+-    for (let header of headerLines) {
+-      let params = header.split(":");
+-
+-      // It is the ufrag attribute of transport node.
+-      if (params[0] == "a=ice-ufrag")
+-        ufrag = params[1];
+-      // It is the pwd attribute of the transport node.
+-      else if (params[0] == "a=ice-pwd")
+-        pwd = params[1];
+-      // It gets the fingerprint data and sha hash information of the
+-      // fingerprint node.
+-      else if (params[0] == "a=fingerprint") {
+-        shaHash = params[1].split(" ")[0];
+-        fingerprintData = header.split(" ")[1];
++    let ufrag, pwd, hashType, fingerprintData;
++    let headers = sections.shift().split("\r\n");
++    for (let header of headers) {
++      // "ice-ufrag" and "ice-pwd" attributes convey the username fragment and
++      // password used by ICE for message integrity. See RFC 5245, Section 15.4.
++      if (header.startsWith("a=ice-ufrag")) {
++        // e.g. [a=ice-ufrag:0c838e8e]
++        ufrag = header.slice(header.indexOf(":") + 1);
++      }
++      else if (header.startsWith("a=ice-pwd")) {
++        // eg. [a=ice-pwd:1ef8fe1ef670d3dd89098b03dac4b4ed]
++        pwd = header.slice(header.indexOf(":") + 1);
++      }
++      else if (header.startsWith("a=fingerprint")) {
++        // e.g. [a=fingerprint:sha-256 2B:6E:6A:8D:...]
++        [hashType, fingerprintData] =
++          header.slice(header.indexOf(":") + 1).split(" ");
+       }
+     }
+ 
+-    // If the session descrription lacks session-level section's information the
+-    // media-level section shouldn't be parsed.
+-    if (!(ufrag && pwd && shaHash && fingerprintData))
+-      return;
++    // If we don't have the required information from the header, don't bother
++    // parsing media sections.
++    if (!(ufrag && pwd && hashType && fingerprintData))
++      return null;
+ 
+-    /* Divide the media type audio/video into set of groups containing the
+-     * payload and candidate information of the respective media found. The
+-     * sessionDesc array now contains only the media-level section elements.
+-     */
+-    sessionDesc.shift();
++    // Now transform each media section to Jingle stanzas.
++    let contentNodes = [];
++    for (let medium of sections) {
++      let lines = medium.split("\r\n");
++      let mediaName = lines[0].split(" ")[0];
+ 
+-    // For each media a content node containing description and transport child
+-    // node is to be created.
+-    for (let medium of sessionDesc) {
+-      let mediaLines = medium.split("\r\n");
+-      let mediaName = mediaLines[0].split(" ")[0];
+-
+-      // Set the name attribute of content node.
+       let nameAttr;
+       if (mediaName == "audio")
+         nameAttr = "voice";
+       else if (mediaName == "video")
+         nameAttr = "face";
+-      // Do not send the content node if the m=… contains media name other than
+-      // audio or video.
+-      else
++      else // ignore sections that are neither audio nor video.
+         continue;
+ 
+-      // Content node is added to content.
+       let content = Stanza.node("content", null,
+-                                {creator: "initiator",
+-                                 name: nameAttr});
++                                {creator: "initiator", name: nameAttr});
+ 
+-      // Setup attribute of description node. Every media-level description
+-      // contains a=setup field whose value is set as the setup attribute.
++      // Every media section contains an a=setup line with a value that's
++      // one of: actpass / active / passive.
+       let setupAttr = medium.match(/(a=setup)[\S]*/)[0].split(":")[1];
+-      // Set attributes for the description node.
++
+       let description = Stanza.node("description", null,
+                                     {xmlns: Stanza.NS.jingle_apps_rtp,
+-                                     // Sets media as audio or video.
+                                      media: mediaName,
+-                                     // setup=actpass / active / passive.
+                                      setup: setupAttr});
+       content.addChild(description);
+ 
+-      // Transport element is a child of content node. It contains fingerprint
+-      // and candidate nodes.
++      // Transport element is a child of content node. It contains a fingerprint
++      // and several candidate nodes.
+       let transport = Stanza.node("transport", null,
+                                   {xmlns: Stanza.NS.jingle_transport_ice_udp,
+                                    ufrag: ufrag,
+                                    pwd: pwd});
+       content.addChild(transport);
+ 
+-      // Fingerprint element.
+-      let fingerprint = Stanza.node("fingerprint", null,
+-                                    {xmlns: Stanza.NS.jingle_apps_dtls,
+-                                     hash: shaHash},
+-                                    // Fingerprint data.
+-                                    fingerprintData);
+-      transport.addChild(fingerprint);
++      transport.addChild(Stanza.node("fingerprint", null,
++                                     {xmlns: Stanza.NS.jingle_apps_dtls,
++                                      hash: hashType},
++                                     fingerprintData));
+ 
+-      let payloads = [];
++      let lastPayload;
+ 
+-      for (let mediaField of mediaLines) {
+-        let params = mediaField.split(" ");
+-        let pNode = params[0].split(":");
++      for (let line of lines) {
++        if (line.startsWith("a=extmap")) {
++          // XEP: 0294 Jingle RTP Header Extensions Negotiation.
++          // e.g. [ a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level].
++          let [id, uri] = line.slice(line.indexOf(":") + 1).split(" ");
++          description.addChild(Stanza.node("rtp-hdrext", null,
++                                           {xmlns: Stanza.NS.jingle_apps_rtp_hdrext,
++                                            id: id, uri: uri}));
++        }
++        else if (line.startsWith("a=rtpmap")) {
++          // e.g. [a=rtpmap:8 PCMA/8000/2]
++          let [id, value] = line.slice(line.indexOf(":") + 1).split(" ");
++          let values = value.split("/");
+ 
+-        /* XEP: 2094 Jingle RTP Header Extensions Negotiation. It defines
+-         * backward-compatible and extensible means to carry multiple header
+-         * extension elements in a single RTP packet. This header extension
+-         * applies to RTP/AVP (Audio/Visual Profile) and its extensions.
+-         * e.g. [ a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level].
+-         * Here 1 is the local ID and the next is URI for the extension.
+-         * It is to be mapped with the rtp-hdrext node.
+-         */
+-        if (pNode[0] == "a=extmap") {
+-          description
+-            .addChild(Stanza.node("rtp-hdrext", null,
+-                                  {xmlns: Stanza.NS.jingle_apps_rtp_hdrext,
+-                                   id: pNode[1],
+-                                   uri: params[1]}));
++          let attr = {id: id, name: values[0], clockrate: values[1]};
++          // channel information is optional.
++          if (values.length >= 3)
++            attr.channels = values[2];
++
++          description.addChild(Stanza.node("payload-type", null, attr));
+         }
+-        /* Payload-type node is child of description node. This attribute
+-         * maps from an RTP payload type number (as used in an "m=" line)
+-         * to an encoding name denoting the payload format to be used.
+-         * e.g. [a=rtpmap:8 PCMA/8000/2]
+-         */
+-        else if (pNode[0] == "a=rtpmap") {
+-          let payloadAttr = params[1].split("/");
+-          // If channel information is missing in the payload type pass
+-          // without channel attribute.
+-          let attr = {id: pNode[1], name: payloadAttr[0],
+-                      clockrate: payloadAttr[1]};
+-          if (payloadAttr.length >= 3)
+-            attr.channels = payloadAttr[2];
++        else if (line.startsWith("a=ptime")) {
++          // This gives the length of time in milliseconds represented by the
++          // media in a packet. It applies to the payload node created before.
++          lastPayload.addChild(Stanza.node("parameter", null,
++                                           {ptime: line.slice(line.indexOf(":") + 1)}));
++        }
++        else if (line.startsWith("a=fmtp")) {
++          // a=fmtp field allows parameters that are specific to a particular
++          // format to be conveyed in a way that SDP does not have to understand
++          // them. This is added in same manner as a=ptime.
++          lastPayload.addChild(Stanza.node("parameter", null,
++                                           {value: line.slice(line.indexOf(" ") + 1)}));
++        }
++        else if (line.startsWith("a=rtcp-fb")) {
++          // XEP: 0293 Jingle RTP Feedback Negotiation.
++          // e.g. [a=rtcp-fb:98 nack rpsi]
++          let values = line.slice(line.indexOf(":") + 1).split(" ");
+ 
+-          payloads.push(Stanza.node("payload-type", null, attr));
++          // TODO: values[0] is the id of the rtpmap this applies to;
++          // we currently just assume the rtpmap is the previous payload.
++          let attr = {xmlns: Stanza.NS.jingle_apps_rtcp_fb, type: values[1]};
++          if (values.length >= 3)
++            attr.subtype = values[2];
++
++          lastPayload.addChild(Stanza.node("rtcp-fb", null, attr));
+         }
+-        /* The ping time information if present should be added as the child
+-         * of payload-type. This gives the length of time in milliseconds
+-         * represented by the media in a packet. Since a=ptime appears just
+-         * above concerned payload-type we add it as children to the payload
+-         * node created just before.
+-         */
+-        else if (pNode[0] == "a=ptime") {
+-          let parameter = Stanza.node("parameter", null,
+-                                      {ptime: pNode[1]});
+-          payloads[payloads.length - 1].addChild(parameter);
+-        }
+-        /* a=fmtp field allows parameters that are specific to a particular
+-         * format to be conveyed in a way that SDP does not have to understand
+-         * them. This is added in same manner as a=ptime.
+-         */
+-        else if (pNode[0] == "a=fmtp") {
+-          let parameter = Stanza.node("parameter", null,
+-                                      {value: params[1]});
+-          payloads[payloads.length - 1].addChild(parameter);
+-        }
+-        /* XEP: 2093 Jingle RTP Feedback Negotiation. It is uses a modified
+-         * RTP profile for audio and video conferences with minimal control
+-         * to acieve timely feedback.
+-         * e.g. [a=rtcp-fb:98 nack rpsi]
+-         * Here rtcp-fb is inserted in the payload-type node with the id 98.
+-         * It contains the type "nack" and subtype "rpsi".
+-         */
+-        else if (pNode[0] == "a=rtcp-fb") {
+-          let attr = {xmlns: Stanza.NS.jingle_apps_rtcp_fb, type: params[1]};
+-          if (params.length >= 3)
+-            attr.subtype = params[2];
+-
+-          payloads[payloads.length - 1]
+-            .addChild(Stanza.node("rtcp-fb", null, attr));
+-        }
+-        /* Candidate nodes are added as child of the transport node. It is
+-         * explained in RFC-5245: Interactive Connectivity Establishment(ICE).
+-         * e.g. [a=candidate:3 2 UDP 1686044670 106.51.45.18 43127 typ host]
+-         */
+-        else if (pNode[0] == "a=candidate") {
+-          let attr = {component: pNode[1], foundation: params[1],
+-                      protocol: params[2], priority: params[3], ip: params[4],
+-                      port: params[5], type: params[7]};
+-          if (params.length >= 9) {
+-            attr.reladdr = params[9];
+-            attr.relport = params[11];
++        else if (line.startsWith("a=candidate")) {
++          // e.g. [a=candidate:3 2 UDP 1686044670 106.51.45.18 43127 typ host]
++          let values = line.slice(line.indexOf(":") + 1).split(" ");
++          let attr = {component: values[0], foundation: values[1],
++                      protocol: values[2], priority: values[3], ip: values[4],
++                      port: values[5], type: values[7]};
++          if (values.length >= 9) {
++            attr.reladdr = values[9];
++            attr.relport = values[11];
+           }
+ 
+           transport.addChild(Stanza.node("candidate", null, attr));
+         }
+       }
+ 
+-      // Add the payload nodes as children to the description node.
+-      payloads.forEach(function(aPayload) description.addChild(aPayload));
+       contentNodes.push(content);
+     }
+ 
+     return contentNodes;
+   },
+ 
+   xml2sdp: function xml2sdp(aXmlOffer) {
+     if (aXmlOffer.length === 0)
+@@ -242,19 +182,23 @@
+                eleFingerprint.innerText);
+     }
+ 
+     /* The content node is used to form the media element of the offer.
+      * i.e. It contains m=, c=, a=rtpmap, a=candidate and other atrributes
+      * which defines how that media voice/video would be mapped.
+      */
+     for (let cNode of aXmlOffer) {
++
++//TODO check cNode is a <content> node
++
+       let media = [];
+       // Media is of the form [m=video 33680 RTP/SAVPF 120].
+       let descData = cNode.getElement(["description"]);
++//TODO nullcheck descData
+       media.push(("m=" + descData.attributes["media"]));
+ 
+       // Connection element (IP is first IP of candidate).
+       // e.g. [c=IN IP4 106.51.45.18]
+       let firstCandidateData = cNode.getElement(["transport"])
+                                     .getElement(["candidate"]);
+ 
+       // The port attribute of first candidate is used if no relport exist. Else
