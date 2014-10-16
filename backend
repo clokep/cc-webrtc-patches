@@ -1,14 +1,14 @@
 # HG changeset patch
 # Parent df2b37118b36092ca71f3ac2ed17dd732750a725
 # User Patrick Cloke <clokep@gmail.com>
-# Date 1413472755 14400
+# Date 1413474465 14400
 #      Wed Oct 15 15:40:34 2014 -0400
 Bug 1018060: Implement voice call support in Instantbird using webRTC.
 
 diff --git a/chat/components/public/prplIConversation.idl b/chat/components/public/prplIConversation.idl
 --- a/chat/components/public/prplIConversation.idl
 +++ b/chat/components/public/prplIConversation.idl
-@@ -69,19 +69,30 @@ interface prplIConversation: nsISupports
+@@ -69,19 +69,32 @@ interface prplIConversation: nsISupports
    /* Method to add or remove an observer */
    void addObserver(in nsIObserver aObserver);
    void removeObserver(in nsIObserver aObserver);
@@ -21,9 +21,11 @@ diff --git a/chat/components/public/prplIConversation.idl b/chat/components/publ
 +[scriptable, uuid(c3a50563-9090-413f-933f-441e9615f585)]
  interface prplIConvIM: prplIConversation {
  
-+  void initiateCall();
++  /* Send a SDP offer when user makes a call */
++  void initiateCall(in AUTF8String aOffer);
 +
-+  void acceptCall()
++  /* Send a SDP answer when a user accepts an incoming video call */
++  void acceptCall(in AUTF8String aAnswer);
 +
 +  /* Send a SDP offer/answer when user makes/answers a video call. aType can be
 +   * either session-initiate or session-accept. */
@@ -542,7 +544,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
  /* This is an ordered list, used to determine chat buddy flags:
   *  index < member    -> noFlags
   *  index = member    -> voiced
-@@ -274,16 +276,50 @@ const XMPPConversationPrototype = {
+@@ -274,16 +276,53 @@ const XMPPConversationPrototype = {
        flags = {incoming: true, _alias: this.buddy.contactDisplayName};
      if (aDate) {
        flags.time = aDate / 1000;
@@ -552,14 +554,17 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
    },
  
 +  /* Called when the user requests a video call. */
-+  webrtcCall: function(aType, aOffer) {
-+    if (!aType)
-+      return;
++  initiateCall: function(aOffer) {
++    this._account._callSid = this._account.generateId();
++    this._sendCallStanza(aOffer, "session-initiate");
++  },
 +
-+    // TODO There can probably be more than one call per account!
-+    if (aType == "session-initiate")
-+      this._account._callSid = this._account.generateId();
++  /* Called when the user accepts an incoming video call. */
++  acceptCall: function(aOffer) {
++    this._sendCallStanza(aOffer, "session-accept");
++  },
 +
++  _sendCallStanza: function(aOffer, aType) {
 +    let item = Stanza.node("jingle", null,
 +                           {xmlns: Stanza.NS.jingle,
 +                            action: aType,
@@ -593,7 +598,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
    unInit: function() {
      this._account.removeConversation(this.buddy.normalizedName);
      delete this.buddy;
-@@ -816,32 +852,59 @@ const XMPPAccountPrototype = {
+@@ -816,32 +855,59 @@ const XMPPAccountPrototype = {
        for each (let qe in aStanza.getChildren("query")) {
          if (qe.uri != Stanza.NS.roster)
            continue;
