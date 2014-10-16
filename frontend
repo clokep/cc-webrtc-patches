@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 4d153d3932fbfc84d46a4762b14790cd38ed4404
+# Parent 0bc3faf12228c817d292c3b4d4ba96e636f891e1
 # User Patrick Cloke <clokep@gmail.com>
-# Date 1413430414 14400
+# Date 1413479339 14400
 #      Wed Oct 15 16:47:59 2014 -0400
 Bug 1018060: Implement voice call support in Instantbird using webRTC, UI part.
 
@@ -138,7 +138,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +                return;
 +              pc.onicecandidate = null;
 +              if (this._conv)
-+                this._conv.webrtcCall("session-initiate", pc.localDescription.sdp);
++                this._conv.initiateCall(pc.localDescription.sdp);
 +              this.ongoingCall = true;
 +            };
 +          }, () => fail("Video"));
@@ -249,7 +249,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +                pc.onicecandidate = null;
 +
 +                if (this._conv)
-+                  this._conv.webrtcCall("session-accept", pc.localDescription.sdp);
++                  this._conv.acceptCall(pc.localDescription.sdp);
 +                this.getElt("videoCallBox").removeAttribute("hidden");
 +                this.ongoingCall = true;
 +              };
