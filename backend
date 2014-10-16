@@ -1,14 +1,14 @@
 # HG changeset patch
 # Parent df2b37118b36092ca71f3ac2ed17dd732750a725
 # User Patrick Cloke <clokep@gmail.com>
-# Date 1413479350 14400
+# Date 1413484072 14400
 #      Wed Oct 15 15:40:34 2014 -0400
 Bug 1018060: Implement voice call support in Instantbird using webRTC.
 
 diff --git a/chat/components/public/prplIConversation.idl b/chat/components/public/prplIConversation.idl
 --- a/chat/components/public/prplIConversation.idl
 +++ b/chat/components/public/prplIConversation.idl
-@@ -69,18 +69,32 @@ interface prplIConversation: nsISupports
+@@ -69,18 +69,28 @@ interface prplIConversation: nsISupports
    /* Method to add or remove an observer */
    void addObserver(in nsIObserver aObserver);
    void removeObserver(in nsIObserver aObserver);
@@ -27,10 +27,6 @@ diff --git a/chat/components/public/prplIConversation.idl b/chat/components/publ
 +  /* Send a SDP answer when a user accepts an incoming video call.
 +   * TODO Pass the mozRTCSessionDescription directly, but this is in webidl. */
 +  void acceptCall(in AUTF8String aAnswer);
-+
-+  /* Send a SDP offer/answer when user makes/answers a video call. aType can be
-+   * either session-initiate or session-accept. */
-+  void webrtcCall(in AUTF8String aType, in AUTF8String aOffer);
 +
 +  /* Terminate a video call */
 +  void endCall();
@@ -90,7 +86,7 @@ diff --git a/chat/content/convbrowser.xml b/chat/content/convbrowser.xml
 diff --git a/chat/modules/jsProtoHelper.jsm b/chat/modules/jsProtoHelper.jsm
 --- a/chat/modules/jsProtoHelper.jsm
 +++ b/chat/modules/jsProtoHelper.jsm
-@@ -518,16 +518,19 @@ const GenericConvIMPrototype = {
+@@ -518,16 +518,20 @@ const GenericConvIMPrototype = {
  
      if (aState == Ci.prplIConvIM.NOT_TYPING)
        delete this.typingState;
@@ -99,7 +95,8 @@ diff --git a/chat/modules/jsProtoHelper.jsm b/chat/modules/jsProtoHelper.jsm
      this.notifyObservers(null, "update-typing", null);
    },
  
-+  webrtcCall: function(aType, aOffer) { throw Cr.NS_ERROR_NOT_IMPLEMENTED; },
++  initiateCall: function(aOffer) { throw Cr.NS_ERROR_NOT_IMPLEMENTED; },
++  acceptCall: function(aOffer) { throw Cr.NS_ERROR_NOT_IMPLEMENTED; },
 +  endCall: function() { throw Cr.NS_ERROR_NOT_IMPLEMENTED; },
 +
    get isChat() false,
@@ -531,12 +528,12 @@ diff --git a/chat/protocols/xmpp/xmpp-xml.jsm b/chat/protocols/xmpp/xmpp-xml.jsm
 +  pubsub_event              : "http://jabber.org/protocol/pubsub#event",
 +
 +  // Jingle elements.
-+  jingle_apps_rtcp_fb       : "urn:xmpp:jingle:apps:rtp:rtcp-fb:0",
-+  jingle_apps_rtp_hdrext    : "urn:xmpp:jingle:apps:rtp:rtp-hdrext:0",
 +  jingle                    : "urn:xmpp:jingle:1",
++  jingle_apps_dtls          : "urn:xmpp:jingle:apps:dtls:0",
++  jingle_apps_rtcp_fb       : "urn:xmpp:jingle:apps:rtp:rtcp-fb:0",
 +  jingle_apps_rtp           : "urn:xmpp:jingle:apps:rtp:1",
-+  jingle_transport_ice_udp  : "urn:xmpp:jingle:transports:ice-udp:1",
-+  jingle_apps_dtls          : "urn:xmpp:jingle:apps:dtls:0"
++  jingle_apps_rtp_hdrext    : "urn:xmpp:jingle:apps:rtp:rtp-hdrext:0",
++  jingle_transport_ice_udp  : "urn:xmpp:jingle:transports:ice-udp:1"
  };
  
  var TOP_LEVEL_ELEMENTS = {
@@ -567,7 +564,27 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
  /* This is an ordered list, used to determine chat buddy flags:
   *  index < member    -> noFlags
   *  index = member    -> voiced
-@@ -274,16 +276,53 @@ const XMPPConversationPrototype = {
+@@ -180,16 +182,19 @@ XMPPMUCConversation.prototype = XMPPMUCC
+ /* Helper class for buddy conversations */
+ const XMPPConversationPrototype = {
+   __proto__: GenericConvIMPrototype,
+ 
+   _typingTimer: null,
+   supportChatStateNotifications: true,
+   _typingState: "active",
+ 
++  // The session ID of a audio/video call for this conversation.
++  _callSid: null,
++
+   _init: function(aAccount, aBuddy) {
+     this.buddy = aBuddy;
+     GenericConvIMPrototype._init.call(this, aAccount, aBuddy.normalizedName);
+   },
+ 
+   get title() this.buddy.contactDisplayName,
+   get normalizedName() this.buddy.normalizedName,
+ 
+@@ -274,16 +279,53 @@ const XMPPConversationPrototype = {
        flags = {incoming: true, _alias: this.buddy.contactDisplayName};
      if (aDate) {
        flags.time = aDate / 1000;
@@ -578,7 +595,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
  
 +  /* Called when the user requests a video call. */
 +  initiateCall: function(aOffer) {
-+    this._account._callSid = this._account.generateId();
++    this._callSid = this._account.generateId();
 +    this._sendCallStanza(aOffer, "session-initiate");
 +  },
 +
@@ -592,7 +609,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
 +                           {xmlns: Stanza.NS.jingle,
 +                            action: aType,
 +                            initiator: this._account._connection._jid.jid,
-+                            sid: this._account._callSid},
++                            sid: this._callSid},
 +                            Jingle.sdp2xml(aOffer));
 +
 +    this._account.sendStanza(Stanza.iq("set", null, this.to, item));
@@ -608,7 +625,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
 +                           {xmlns: Stanza.NS.jingle,
 +                            action: "session-terminate",
 +                            initiator: this._account._connection._jid.jid,
-+                            sid: this._account._callSid}, reason);
++                            sid: this._callSid}, reason);
 +
 +    this._account.sendStanza(Stanza.iq("set", null, this.to, item));
 +  },
@@ -621,7 +638,7 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
    unInit: function() {
      this._account.removeConversation(this.buddy.normalizedName);
      delete this.buddy;
-@@ -816,32 +855,59 @@ const XMPPAccountPrototype = {
+@@ -816,16 +858,40 @@ const XMPPAccountPrototype = {
        for each (let qe in aStanza.getChildren("query")) {
          if (qe.uri != Stanza.NS.roster)
            continue;
@@ -662,22 +679,3 @@ diff --git a/chat/protocols/xmpp/xmpp.jsm b/chat/protocols/xmpp/xmpp.jsm
          let s = Stanza.iq("result", aStanza.attributes["id"], this._jid.domain);
          this._connection.sendStanza(s);
        }
-     }
-   },
- 
-   /* Generate unique sid for the stanza. Using id and unique sid is defined in
-    * RFC 6120 (Section 8.2.3, 4.7.3).
-    */
-   generateId: function() UuidGenerator.generateUUID().toString().slice(1, -1),
- 
-+  /* Store the SID of the video call session */
-+  _callSid: "",
-+
-   /* Called when a presence stanza is received */
-   onPresenceStanza: function(aStanza) {
-     let from = aStanza.attributes["from"];
-     this.DEBUG("Received presence stanza for " + from);
- 
-     let jid = this.normalize(from);
-     let type = aStanza.attributes["type"];
-     if (type == "subscribe") {
