@@ -167,7 +167,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +              pc.onicecandidate = null;
 +              if (!this._conv)
 +                return;
-+              this._conv.webrtcCall("session-initiate", pc.localDescription.sdp);
++              this._conv.initiateCall(pc.localDescription.sdp);
 +              this.ongoingCall = true;
 +            };
 +          }, () => this.callError("Video"));
@@ -261,7 +261,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +                pc.onicecandidate = null;
 +
 +                if (this._conv)
-+                  this._conv.webrtcCall("session-accept", pc.localDescription.sdp);
++                  this._conv.acceptCall(pc.localDescription.sdp);
 +                this.getElt("videoCallBox").removeAttribute("hidden");
 +                this.ongoingCall = true;
 +              };
