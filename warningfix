@@ -1,0 +1,27 @@
+# HG changeset patch
+# Parent 32f7cd645a70aab7325df8ea1e5b93053cbcf801
+# User aleth <aleth@instantbird.org>
+ReferenceError
+
+diff --git a/im/content/conversation.xml b/im/content/conversation.xml
+--- a/im/content/conversation.xml
++++ b/im/content/conversation.xml
+@@ -2038,17 +2038,17 @@
+       </method>
+ 
+       <method name="initConversationUI">
+         <body>
+         <![CDATA[
+           // The toolbarbuttons for different services to be added below.
+ 
+           // Video call button
+-          button = document.createElement("toolbarbutton");
++          let button = document.createElement("toolbarbutton");
+           let bundle = Services.strings.createBundle(
+             "chrome://instantbird/locale/conversation.properties");
+           button.classList.add("videoCallButton");
+           button.setAttribute("tooltiptext",
+                               bundle.GetStringFromName("videoCallButton.label"));
+           button.setAttribute("accesskey",
+                               bundle.GetStringFromName("videoCallButton.accesskey"));
+           button.setAttribute("anonid", "videoCallButton");
