@@ -1,31 +1,9 @@
 # HG changeset patch
-# Date 1413516914 14400
+# Date 1413517017 14400
 # User Patrick Cloke <clokep@gmail.com>
 # Parent d0dc76016c044fef004717ad3410503655eeabbd
 Clean up xml2sdp.
 
-diff --git a/chat/content/convbrowser.xml b/chat/content/convbrowser.xml
---- a/chat/content/convbrowser.xml
-+++ b/chat/content/convbrowser.xml
-@@ -76,17 +76,17 @@
- 
-       <property name="currentURI"
-                 onget="return this.webNavigation.currentURI;"
-                 readonly="true"/>
- 
-       <field name="_docShell">null</field>
- 
-       <property name="docShell"
--                onget="return this._docShell || (this._docShell = this.boxObject.docShell);"
-+                onget="return this._docShell || (this._docShell = this.boxObject.QueryInterface(Components.interfaces.nsIContainerBoxObject).docShell);"
-                 readonly="true"/>
- 
-       <field name="_webNavigation">null</field>
- 
-       <property name="webNavigation"
-                 onget="return this._webNavigation || (this._webNavigation = this.docShell.QueryInterface(Components.interfaces.nsIWebNavigation));"
-                 readonly="true"/>
- 
 diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jingle.jsm
 --- a/chat/protocols/xmpp/xmpp-jingle.jsm
 +++ b/chat/protocols/xmpp/xmpp-jingle.jsm
