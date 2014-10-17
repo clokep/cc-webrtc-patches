@@ -1,14 +1,13 @@
 # HG changeset patch
-# Parent 0bc3faf12228c817d292c3b4d4ba96e636f891e1
 # User Patrick Cloke <clokep@gmail.com>
-# Date 1413479339 14400
-#      Wed Oct 15 16:47:59 2014 -0400
+# Date 1413430414 14400
+#      Wed Oct 15 23:33:34 2014 -0400
 Bug 1018060: Implement voice call support in Instantbird using webRTC, UI part.
 
 diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 --- a/im/content/conversation.xml
 +++ b/im/content/conversation.xml
-@@ -6,35 +6,45 @@
+@@ -6,35 +6,56 @@
  
  <!DOCTYPE bindings [
    <!ENTITY % instantbirdDTD SYSTEM "chrome://instantbird/locale/instantbird.dtd">
@@ -35,15 +34,27 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 -                           xbl:inherits="tooltip=contenttooltip,contextmenu=contentcontextmenu,autoscrollpopup"/>
 -              <xul:progressmeter anonid="browserProgress" hidden="true"/>
 -              <xul:findbar anonid="FindToolbar" reversed="true"/>
-+          <xul:vbox flex="1">
-+            <xul:vbox class="videoCallBox" anonid="videoCallBox" hidden="true"
-+                      flex="2">
-+              <html:video class="remoteVideo" anonid="remoteVideo"/>
-+              <xul:button class="endCallButton" anonid="endCallButton"
-+                          command="cmd_endCall" tooltiptext="&endCall.label;"/>
-+              <html:video class="localVideo" anonid="localVideo"/>
-             </xul:vbox>
+-            </xul:vbox>
 -          </xul:notificationbox>
++          <xul:vbox flex="1">
++            <xul:stack class="videoCallBox" anonid="videoCallBox" flex="1" hidden="true">
++              <html:video class="remoteVideo" anonid="remoteVideo"/>
++              <xul:vbox>
++                <xul:box flex="1"/>
++                <xul:hbox>
++                  <xul:box flex="1"/>
++                  <html:video class="localVideo" anonid="localVideo"/>
++                </xul:hbox>
++              </xul:vbox>
++              <xul:vbox class="flexbox">
++                <xul:hbox class="flexbox">
++                  <xul:box flex="1" class="flexbox"/>
++                  <xul:button class="endCallButton" anonid="endCallButton"
++                          command="cmd_endCall" tooltiptext="&endCall.label;"/>
++                </xul:hbox>
++                <xul:box flex="1" class="flexbox"/>
++                </xul:vbox>
++            </xul:stack>
 +            <xul:notificationbox class="conv-messages" anonid="convNotificationBox" flex="1" xbl:inherits="chat">
 +              <xul:vbox flex="1">
 +                <xul:browser anonid="browser" type="content-conversation" flex="1"
@@ -61,7 +72,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
                <xul:label class="conv-nicklist-header-label"
                           anonid="participantLabel"
                           value="&chat.participants;"/>
-@@ -262,16 +272,280 @@
+@@ -262,16 +283,279 @@
              if (conv.isChat && aMsg.containsNick)
                this.tab.setAttribute("attention", "true");
              this.tab.setAttribute("unread", "true");
@@ -76,16 +87,16 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +        <parameter name="aErrorCallback"/>
 +        <body>
 +        <![CDATA[
-+          let remoteVideo = this.getElt("remoteVideo");
-+          if (!this.pc) {
-+            this.pc = new mozRTCPeerConnection();
-+            this.pc.onaddstream = function(obj) {
++          if (!this.peerConnection) {
++            this.peerConnection = new (this.contentWindow.mozRTCPeerConnection)();
++            this.peerConnection.onaddstream = obj => {
++              let remoteVideo = this.getElt("remoteVideo");
 +              remoteVideo.mozSrcObject = obj.stream;
 +              remoteVideo.play();
 +            };
 +          }
 +
-+          return this.pc;
++          return this.peerConnection;
 +        ]]>
 +        </body>
 +      </method>
@@ -95,15 +106,47 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +        <parameter name="aErrorCallback"/>
 +        <body>
 +        <![CDATA[
-+          this.contentWindow.navigator.mozGetUserMedia({video: true, audio:true},
++          this.contentWindow.navigator.mozGetUserMedia({video: true, audio: true},
 +                                                       stream => {
 +            let localVideo = this.getElt("localVideo");
 +            localVideo.mozSrcObject = stream;
 +            localVideo.play();
-+            if (this.pc)
-+              this.pc.addStream(stream);
++            if (this.peerConnection)
++              this.peerConnection.addStream(stream);
 +            aSuccessCallback();
 +          }, aErrorCallback);
++        ]]>
++        </body>
++      </method>
++
++      <method name="callError">
++        <parameter name="aErrorType"/>
++        <body>
++        <![CDATA[
++          // Display error notification for call failure.
++          let convBundle =
++            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
++          let cnb = this.getElt("convNotificationBox");
++          cnb.appendNotification(
++            convBundle.GetStringFromName("callError.label"),
++            "video-call-error", null, cnb.PRIORITY_INFO_HIGH, null);
++          let msg = "";
++          switch(aErrorType) {
++            case "LocalDesc":
++              msg = "Unable to set local description.";
++              break;
++            case "Offer":
++              msg = "SDP session description offer creation failed.";
++              break;
++            case "RemoteDesc":
++              msg = "Unable to set remote description."
++              break;
++            case "Video":
++              msg = "Failed to intialize video.";
++              break;
++          }
++          Components.utils.reportError("Unable to establish call:\n" + msg);
++          this.endCall();
 +        ]]>
 +        </body>
 +      </method>
@@ -111,70 +154,51 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +      <method name="startCall">
 +        <body>
 +        <![CDATA[
-+          // Display error notification for call failure.
-+          let convBundle =
-+            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
 +          let cnb = this.getElt("convNotificationBox");
-+
-+          let fail = type => {
-+            cnb.appendNotification(
-+              convBundle.GetStringFromName("callError" +
-+                                           (type || Notification) + ".label"),
-+              "video-call-error",
-+              null,
-+              cnb.PRIORITY_INFO_HIGH,
-+              null
-+            );
-+            this.endCall();
-+          };
 +
 +          let pc = this.initPeerConnection();
 +          this.getVideo(() => {
 +            pc.createOffer(offer => {
-+              pc.setLocalDescription(offer, () => {}, () => fail("LocalDesc"));
-+            }, () => fail("Offer"));
++              pc.setLocalDescription(offer, () => {}, () => this.callError("LocalDesc"));
++            }, () => this.callError("Offer"));
 +            pc.onicecandidate = event => {
 +              if (event.candidate)
 +                return;
 +              pc.onicecandidate = null;
-+              if (this._conv)
-+                this._conv.initiateCall(pc.localDescription.sdp);
++              if (!this._conv)
++                return;
++              this._conv.webrtcCall("session-initiate", pc.localDescription.sdp);
 +              this.ongoingCall = true;
 +            };
-+          }, () => fail("Video"));
++          }, () => this.callError("Video"));
 +
 +          // Display call wait notification until call is answered.
++          let convBundle =
++            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
 +          cnb.appendNotification(
 +            convBundle.GetStringFromName("callWait.label"),
 +            "video-call-wait",
 +            null,
-+            cnb.PRIORITY_INFO_HIGH,
-+            [
-+              {
-+                accessKey: convBundle.GetStringFromName("cancelCall.accesskey"),
-+                callback: () => this.endCall(true),
-+                label: convBundle.GetStringFromName("cancelCall.label"),
-+                popup: null
-+              }
-+            ]);
++            cnb.PRIORITY_INFO_HIGH, [{
++              accessKey: convBundle.GetStringFromName("cancelCall.accesskey"),
++              callback: () => this.endCall(true),
++              label: convBundle.GetStringFromName("cancelCall.label"),
++              popup: null
++            }]);
 +
 +          // Set call timeout to 30 sec.
 +          const timer = 30;
 +          this.callTimeout = setTimeout(() => this.endCall(true), timer * 1000);
 +
 +          // Disable video button on call start.
-+          let videoCallButton = this.getElt("conv-top-info")
-+                                    .querySelector(".videoCallButton")
++          let videoCallButton = this.getElt("videoCallButton");
 +          if (videoCallButton)
 +            videoCallButton.disabled = true;
-+
-+          this.resetInput();
-+          return this.callTimeout;
 +        ]]>
 +        </body>
 +      </method>
 +
-+      <method name="videoCallNotification">
++      <method name="onVideoCallOffer">
 +        <parameter name="aData"/>
 +        <body>
 +        <![CDATA[
@@ -204,8 +228,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +
 +          // Disable video button as soon as call notification is received so
 +          // that user cannot make another call until he accepts/rejects it.
-+          let videoCallButton = this.getElt("conv-top-info")
-+                                    .querySelector(".videoCallButton")
++          let videoCallButton = this.getElt("videoCallButton");
 +          if (videoCallButton)
 +            videoCallButton.disabled = true;
 +
@@ -222,17 +245,6 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +          let convBundle =
 +            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
 +          let cnb = this.getElt("convNotificationBox");
-+          let fail = type => {
-+            cnb.appendNotification(
-+              convBundle.GetStringFromName("callError" +
-+                                           (type || Notification) + ".label"),
-+              "video-call-error",
-+              null,
-+              cnb.PRIORITY_INFO_HIGH,
-+              null
-+            );
-+            this.endCall(true);
-+          };
 +
 +          let offer = {type: "offer", sdp: aOffer};
 +          let pc = this.initPeerConnection();
@@ -240,8 +252,8 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +          pc.setRemoteDescription(offer, () => {
 +            this.getVideo(() => {
 +              pc.createAnswer(answer => {
-+                pc.setLocalDescription(answer, () => {}, () => fail("LocalDesc"));
-+              }, () => fail("Answer"));
++                pc.setLocalDescription(answer, () => {}, () => this.callError("LocalDesc"));
++              }, () => this.callError("Answer"));
 +
 +              pc.onicecandidate = event => {
 +                if (event.candidate)
@@ -249,32 +261,32 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +                pc.onicecandidate = null;
 +
 +                if (this._conv)
-+                  this._conv.acceptCall(pc.localDescription.sdp);
++                  this._conv.webrtcCall("session-accept", pc.localDescription.sdp);
 +                this.getElt("videoCallBox").removeAttribute("hidden");
 +                this.ongoingCall = true;
 +              };
-+            }, () => fail("Video"));
-+          }, () => fail("RemoteDesc"));
++            }, () => this.callError("Video"));
++          }, () => this.callError("RemoteDesc"));
 +        ]]>
 +        </body>
 +      </method>
 +
-+      <method name="webrtcAnswerCall">
++      <method name="onVideoCallAnswered">
 +        <parameter name="aAnswer"/>
 +        <body>
 +        <![CDATA[
 +          let answer = {type: "answer", sdp: aAnswer};
 +          answer = new mozRTCSessionDescription(answer);
-+          if (this.pc)
-+            this.pc.setRemoteDescription(answer);
++          this.peerConnection.setRemoteDescription(answer);
 +
 +          // Clear the timeout
 +          clearTimeout(this.callTimeout);
 +          delete this.callTimeout;
 +
 +          let callWaitNotification = this.getElt("convNotificationBox");
-+          if (callWaitNotification.getNotificationWithValue("video-call-wait"))
-+            callWaitNotification.removeCurrentNotification();
++          let notification =  callWaitNotification.getNotificationWithValue("video-call-wait");
++          if (notification)
++            callWaitNotification.removeNotification(notification);
 +
 +          this.getElt("videoCallBox").removeAttribute("hidden");
 +        ]]>
@@ -295,27 +307,25 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +          }
 +
 +          let localVideo = this.getElt("localVideo");
-+          if (localVideo) {
-+            if (localVideo.mozSrcObject) {
-+              localVideo.mozSrcObject.stop();
-+              localVideo.mozSrcObject = null;
-+            }
++          if (localVideo && localVideo.mozSrcObject) {
++            localVideo.mozSrcObject.stop();
++            localVideo.mozSrcObject = null;
 +          }
 +
-+          if (this.pc) {
-+            this.pc.close();
-+            this.pc = null;
++          if (this.peerConnection) {
++            this.peerConnection.close();
++            this.peerConnection = null;
 +          }
 +
-+          let videoCallButton = this.getElt("conv-top-info")
-+                                    .querySelector(".videoCallButton")
++          let videoCallButton = this.getElt("videoCallButton");
 +          if (videoCallButton)
 +            videoCallButton.removeAttribute("disabled");
 +
 +          let videoCallNotification = this.getElt("convNotificationBox");
-+          if (videoCallNotification.getNotificationWithValue("video-call-notification") ||
-+              videoCallNotification.getNotificationWithValue("video-call-wait"))
-+            videoCallNotification.removeCurrentNotification();
++          let notification = videoCallNotification.getNotificationWithValue("video-call-notification") ||
++            videoCallNotification.getNotificationWithValue("video-call-wait")
++          if (notification)
++            videoCallNotification.removeNotification(notification);
 +
 +          // It is used to send the session-terminate stanza to the user to
 +          // disconnect call from his side too.
@@ -342,7 +352,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
              return;
  
            let account = this._conv.account;
-@@ -1732,22 +2006,59 @@
+@@ -1732,21 +2016,52 @@
              cti.setAttribute("statusMessage", statusString + statusText);
              cti.setAttribute("status", Status.toAttribute(statusType));
              cti.setAttribute("statusTypeTooltiptext", statusString);
@@ -354,30 +364,14 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
 +      <method name="updateVideoCallButton">
 +        <body>
 +        <![CDATA[
-+          let bundle =
-+            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
-+          let videoCallButton = this.getElt("conv-top-info")
-+                                .querySelector(".videoCallButton");
++          let button = this.getElt("videoCallButton");
 +
-+
-+          if (videoCallButton &&
-+              (this._conv.account.protocol.id != "prpl-jabber" ||
-+               this._conv.account.protocol.id != "prpl-gtalk")) {
-+            videoCallButton.remove();
-+          }
-+          if (!videoCallButton &&
-+              (this._conv.account.protocol.id != "prpl-jabber" ||
-+               this._conv.account.protocol.id != "prpl-gtalk")) {
-+            let videoCallButton = document.createElement("toolbarbutton");
-+            videoCallButton.classList.add("videoCallButton");
-+            videoCallButton.setAttribute("tooltiptext",
-+                                         bundle.GetStringFromName("videoCallButton.label"));
-+            videoCallButton.setAttribute("accesskey",
-+                                         bundle.GetStringFromName("videoCallButton.accesskey"));
-+            videoCallButton.setAttribute("command", "cmd_startCall");
-+            let cti = this.getElt("conv-top-info");
-+            cti.insertBefore(videoCallButton, cti.firstChild);
-+          }
++          // TODO Implement a way to actually check if the conversation supports video chat.
++          if (this._conv.account.protocol.id != "prpl-jabber" &&
++              this._conv.account.protocol.id != "prpl-gtalk")
++            button.setAttribute("hidden", true);
++          else
++            button.removeAttribute("hidden");
 +
 +        ]]>
 +        </body>
@@ -386,15 +380,25 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
        <method name="initConversationUI">
          <body>
          <![CDATA[
--          let cti = this.getElt("conv-top-info");
++          // The toolbarbuttons for different services to be added below.
 +
-+          let bundle =
-+            Services.strings.createBundle("chrome://instantbird/locale/conversation.properties");
-           // The toolbarbuttons for different services to be added below.
- 
 +          // Video call button
++          button = document.createElement("toolbarbutton");
++          let bundle = Services.strings.createBundle(
++            "chrome://instantbird/locale/conversation.properties");
++          button.classList.add("videoCallButton");
++          button.setAttribute("tooltiptext",
++                              bundle.GetStringFromName("videoCallButton.label"));
++          button.setAttribute("accesskey",
++                              bundle.GetStringFromName("videoCallButton.accesskey"));
++          button.setAttribute("anonid", "videoCallButton");
++          button.setAttribute("command", "cmd_startCall");
++          button.setAttribute("hidden", "true");
+           let cti = this.getElt("conv-top-info");
+-          // The toolbarbuttons for different services to be added below.
++          cti.insertBefore(button, cti.firstChild);
 +          this.updateVideoCallButton();
-+
+ 
            // Target switcher button.
            let targetSwitcher = document.createElement("toolbarbutton");
            targetSwitcher.setAttribute("disabled", "true");
@@ -402,26 +406,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
            let account = this._conv.account;
            targetSwitcher.setAttribute("image",
                                        account.protocol.iconBaseURI + "icon.png");
-           let targetTooltip =
-@@ -1755,16 +2066,17 @@
-                                              [this._conv.title,
-                                               account.name,
-                                               account.protocol.name], 3);
-           targetSwitcher.setAttribute("tooltiptext", targetTooltip);
-           let targetPopup = document.createElement("menupopup");
-           targetPopup.classList.add("all-targets-popup");
-           targetPopup.setAttribute("position", "after_end");
-           targetSwitcher.appendChild(targetPopup);
-+          let cti = this.getElt("conv-top-info");
-           cti.appendChild(targetSwitcher);
- 
-           if (this._conv.isChat) {
-             this.updateTopic();
-             this.setAttribute("chat", "true");
-             this.tab.setAttribute("chat", "true");
-             this.tab.setAttribute("prpl", this._conv.account.protocol.id);
- 
-@@ -1852,16 +2164,17 @@
+@@ -1852,16 +2167,17 @@
              break;
  
            case "replying-to-prompt":
@@ -439,7 +424,7 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
            case "update-buddy-icon":
            case "update-conv-chatleft":
            case "update-conv-chatjoining":
-@@ -1892,16 +2205,30 @@
+@@ -1892,16 +2208,33 @@
              this.updateTopic();
              break;
  
@@ -450,16 +435,19 @@ diff --git a/im/content/conversation.xml b/im/content/conversation.xml
              break;
 +
 +          case "webrtc-call-offer":
-+            this.videoCallNotification(aData);
++            this.onVideoCallOffer(aData);
 +            break;
 +
 +          case "webrtc-call-answer":
-+            if (this.callTimeout)
-+              this.webrtcAnswerCall(aData);
++            if (this.callTimeout) {
++              this.onVideoCallAnswered(aData);
++              break;
++            }
++            Components.utils.reportError("Unexpected webrtc call answer:\n" + aData);
 +            break;
 +
 +          case "call-disconnect":
-+            if (this.ongoingCall == true)
++            if (this.ongoingCall)
 +              this.endCall();
 +            break;
            }
@@ -499,7 +487,7 @@ diff --git a/im/content/instantbird.xul b/im/content/instantbird.xul
 diff --git a/im/locales/en-US/chrome/instantbird/conversation.properties b/im/locales/en-US/chrome/instantbird/conversation.properties
 --- a/im/locales/en-US/chrome/instantbird/conversation.properties
 +++ b/im/locales/en-US/chrome/instantbird/conversation.properties
-@@ -5,8 +5,29 @@
+@@ -5,8 +5,24 @@
  contextAddContact.label=Add Contact…
  contextAddContact.accesskey=A
  contextShowLogs.label=Show Logs
@@ -520,12 +508,7 @@ diff --git a/im/locales/en-US/chrome/instantbird/conversation.properties b/im/lo
 +cancelCall.accesskey=C
 +rejectCall.label=Reject
 +rejectCall.accesskey=R
-+callErrorAnswer.label=SDP session description answer creation failed. Sorry, the call cannot be established.
-+callErrorLocalDesc.label=Unable to set local description. Sorry, the call cannot be established.
-+callErrorNotification.label=Sorry, the call cannot be established.
-+callErrorOffer.label=SDP session description offer creation failed. Sorry, the call cannot be established.
-+callErrorRemoteDesc.label=Unable to set remote description. Sorry, the call cannot be established.
-+callErrorVideo.label=Failed to intialize video. Sorry, the call cannot be established.
++callError.label=Unable to establish call.
 +callWait.label=Waiting for the response…
 +endVideoCall.label=The video call has ended.
 +videoCallNotification.label=%1$S is trying to call you.
@@ -596,7 +579,7 @@ diff --git a/im/themes/conversation.css b/im/themes/conversation.css
  .status-overlay-icon[status="idle"] {
    list-style-image: url('chrome://chat/skin/idle.png');
  }
-@@ -399,8 +431,69 @@ grippy {
+@@ -399,8 +431,89 @@ grippy {
  .conv-nicklist:focus > .listitem-iconic[inactive][selected] > .listcell-iconic > .listcell-label {
    color: HighlightText !important;
  }
@@ -608,40 +591,60 @@ diff --git a/im/themes/conversation.css b/im/themes/conversation.css
 +
 +/* Video call CSS */
 +.videoCallBox {
-+  position: fixed;
 +  width: 100%;
 +  min-height: 50%;
++  padding: 0;
 +}
 +
 +.remoteVideo {
-+  position: fixed;
 +  width: 100%;
 +  height: 50%;
-+  z-index: 1;
 +  background: black;
 +}
 +
 +.localVideo {
-+  position: absolute;
-+  height: 20%;
-+  z-index: 2;
-+  top: calc(80% - 6px);
-+  right: 2px;
 +  border: 2px solid rgba(255, 255, 255, 0.25);
 +  border-radius: 5px;
++  background: black;
++  width: 192px;
++  max-width: 192px;
++  min-width: 192px;
++  height: 144px;
++  max-height: 144px;
++  min-height: 144px;
 +}
 +
 +.endCallButton {
 +  -moz-appearance: none;
-+  position: absolute;
-+  z-index: 2;
-+  margin-top: 8px;
-+  margin-left: calc(100% - 24px);
-+  min-width: 16px;
 +  border: none;
++  max-width: 16px;
++  max-height: 16px;
++  min-width: 16px;
++  width: 16px;
++  height: 16px;
++  padding: 0;
++  margin: 0;
 +  list-style-image: url("chrome://global/skin/icons/close.png");
 +  -moz-image-region: rect(0, 16px, 16px, 0);
-+  background: radial-gradient(circle, rgba(255, 255, 255, 0.25) 25%, transparent 100%);
++}
++
++.flexbox {
++  padding: 0;
++  margin: 0;
++}
++
++.endCallButton > .button-box {
++  width: 16px;
++}
++
++.endCallButton > .button-box > .button-icon {
++  width: 16px;
++  height: 16px;
++  margin: 0;
++}
++
++.endCallButton > .button-box > .button-label {
++  display: none;
 +}
 +
 +.endCallButton:hover {
@@ -716,7 +719,7 @@ diff --git a/im/themes/jar.mn b/im/themes/jar.mn
  	skin/classic/aero/instantbird/preferences/applications.css   (preferences-winstripe/applications.css)
 diff --git a/im/themes/webRTC-sharingDevice-16.png b/im/themes/webRTC-sharingDevice-16.png
 new file mode 100644
-index e69de29bb2d1d6434b8b29ae775ad8c2e48c5391..b7ab6f053df24ca3fcb8e55f394617db181a8558
+index 0000000000000000000000000000000000000000..b7ab6f053df24ca3fcb8e55f394617db181a8558
 GIT binary patch
 literal 3856
 zc${^Y2{@GN7r+N4SwohrW65rYVeEz&G<K1-?1Qn*FvD0YYe*s62+39?bS>Fs$-ZPQ
@@ -788,7 +791,7 @@ Py?YQ^hVU{C`|$q(x0=At
 
 diff --git a/im/themes/webRTC-sharingDevice-16@2x.png b/im/themes/webRTC-sharingDevice-16@2x.png
 new file mode 100644
-index e69de29bb2d1d6434b8b29ae775ad8c2e48c5391..cf1dd9ab6379291d393d4536195ba0af1bcdff28
+index 0000000000000000000000000000000000000000..cf1dd9ab6379291d393d4536195ba0af1bcdff28
 GIT binary patch
 literal 4020
 zc${^Y2|Scr8^C8&_I<mJ>uRi#%rKLs$tZ?U%-9Vs8H@~LX3R`xj5V@WRH7_py^Kiq
