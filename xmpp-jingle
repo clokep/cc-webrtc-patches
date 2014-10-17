@@ -1,10 +1,35 @@
 # HG changeset patch
-# Parent 57ac0341c938934a73385b73b72aaacef1bc7d32
+# Date 1413516914 14400
+# User Patrick Cloke <clokep@gmail.com>
+# Parent d0dc76016c044fef004717ad3410503655eeabbd
+Clean up xml2sdp.
 
+diff --git a/chat/content/convbrowser.xml b/chat/content/convbrowser.xml
+--- a/chat/content/convbrowser.xml
++++ b/chat/content/convbrowser.xml
+@@ -76,17 +76,17 @@
+ 
+       <property name="currentURI"
+                 onget="return this.webNavigation.currentURI;"
+                 readonly="true"/>
+ 
+       <field name="_docShell">null</field>
+ 
+       <property name="docShell"
+-                onget="return this._docShell || (this._docShell = this.boxObject.docShell);"
++                onget="return this._docShell || (this._docShell = this.boxObject.QueryInterface(Components.interfaces.nsIContainerBoxObject).docShell);"
+                 readonly="true"/>
+ 
+       <field name="_webNavigation">null</field>
+ 
+       <property name="webNavigation"
+                 onget="return this._webNavigation || (this._webNavigation = this.docShell.QueryInterface(Components.interfaces.nsIWebNavigation));"
+                 readonly="true"/>
+ 
 diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jingle.jsm
 --- a/chat/protocols/xmpp/xmpp-jingle.jsm
 +++ b/chat/protocols/xmpp/xmpp-jingle.jsm
-@@ -3,214 +3,162 @@
+@@ -3,379 +3,308 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  const EXPORTED_SYMBOLS = ["Jingle"];
@@ -314,28 +339,238 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
    },
  
    xml2sdp: function xml2sdp(aXmlOffer) {
-     if (aXmlOffer.length === 0)
-@@ -242,19 +190,23 @@
+-    if (aXmlOffer.length === 0)
+-      return;
++    if (!aXmlOffer.length)
++      return null;
+ 
+-    let sdp = [];
+-    let nodeContent = [];
+-
+-    /* Complete SDP session-level description should be generated. Since there
+-     * is no mention in the XEPs about how to pass v=, o=, s= and t= fields in
+-     * form of XML stanzas we have given a constant value to each of these
+-     * fields. Note that these value don't affect the call being made.
+-     */
+-    let header = ["v=0",
+-                  "o=Mozilla-SIPUA 0 0 IN IP4 0.0.0.0",
+-                  "s=SIP Call",
+-                  "t=0 0"];
+-    sdp.push(header.join("\r\n"));
++    // Parts of the header (v=, o=, s= and t= fields) are not passed as part of
++    // the XMPP stanza.
++    let sdp = ["v=0",
++               "o=Mozilla-SIPUA 0 0 IN IP4 0.0.0.0",
++               "s=SIP Call",
++               "t=0 0"];
+ 
+     // Transport node contains ufrag, pwd, fingerprint.
+     let eleTransport = aXmlOffer[0].getElement(["transport"]);
+-    let eleFingerprint = eleTransport.getElement(["fingerprint"]);
++    if (!eleTransport)
++      return null;
+ 
+     sdp.push("a=ice-ufrag:" + eleTransport.attributes["ufrag"]);
+     sdp.push("a=ice-pwd:" + eleTransport.attributes["pwd"]);
+ 
++    let eleFingerprint = eleTransport.getElement(["fingerprint"]);
++    // TODO Is fingerprint required?
+     if (eleFingerprint) {
+       sdp.push("a=fingerprint:" + eleFingerprint.attributes["hash"]  + " " +
                 eleFingerprint.innerText);
      }
  
-     /* The content node is used to form the media element of the offer.
-      * i.e. It contains m=, c=, a=rtpmap, a=candidate and other atrributes
-      * which defines how that media voice/video would be mapped.
-      */
+-    /* The content node is used to form the media element of the offer.
+-     * i.e. It contains m=, c=, a=rtpmap, a=candidate and other atrributes
+-     * which defines how that media voice/video would be mapped.
+-     */
++    // The content node is used to form the media element of the offer. I.e. it
++    // contains m=, c=, a=rtpmap, a=candidate and other attributes which define
++    // how that media voice/video are mapped.
      for (let cNode of aXmlOffer) {
+-      let media = [];
++      if (cNode.qName != "content")
++        continue;
 +
-+//TODO check cNode is a <content> node
++      let descData = cNode.getElement(["description"]);
++      if (!descData)
++        continue;
 +
-       let media = [];
        // Media is of the form [m=video 33680 RTP/SAVPF 120].
-       let descData = cNode.getElement(["description"]);
-+//TODO nullcheck descData
-       media.push(("m=" + descData.attributes["media"]));
+-      let descData = cNode.getElement(["description"]);
+-      media.push(("m=" + descData.attributes["media"]));
++      let medium = "m=" + descData.attributes["media"];
  
        // Connection element (IP is first IP of candidate).
        // e.g. [c=IN IP4 106.51.45.18]
-       let firstCandidateData = cNode.getElement(["transport"])
-                                     .getElement(["candidate"]);
+-      let firstCandidateData = cNode.getElement(["transport"])
+-                                    .getElement(["candidate"]);
++      let transport = cNode.getElement(["transport"]);
++      if (!transport)
++        continue;
++
++      let firstCandidate = transport.getElement(["candidate"]);
  
        // The port attribute of first candidate is used if no relport exist. Else
+       // use the first relport found in other candidate of the media.
+-      media.push(firstCandidateData.attributes["port"], "RTP/SAVPF");
++      medium += " " + firstCandidate.attributes["port"] + " RTP/SAVPF";
+ 
+-      let connection = "c=IN ";
+-      let IP = firstCandidateData.attributes["ip"];
+-      if (IP.contains(":"))
+-        connection += "IP6 " + IP;
++      let connection = "c=IN IP";
++      let ip = firstCandidate.attributes["ip"];
++      if (ip.contains(":"))
++        connection += "6 " + ip;
+       else
+-        connection += "IP4 " + IP;
+-      nodeContent.push(connection);
+-
+-      // The c=IN... line must be added just below the m=… line. indexConnection
+-      // stores the index of last occurence of c=... element in the SDP offer.
+-      let indexConnection = nodeContent.lastIndexOf(connection);
++        connection += "4 " + ip;
++      let section = [connection];
+ 
+       // Payload element [a=rtpmap:8 PCMA/8000].
+-      let payloadData = descData.getElements(["payload-type"]);
+-      let payload;
++      let payloadNodes = descData.getElements(["payload-type"]);
+       let indexSendrecv;
+-      for (let pNode of payloadData) {
+-        payload = "a=rtpmap:" + pNode.attributes["id"] + " " +
+-                  pNode.attributes["name"] + "/" + pNode.attributes["clockrate"];
+-        if (pNode.attributes["channels"])
+-          payload += "/" + pNode.attributes["channels"];
++      for (let payloadNode of payloadNodes) {
++        let payload = "a=rtpmap:" + payloadNode.attributes["id"] + " " +
++          payloadNode.attributes["name"] + "/" + payloadNode.attributes["clockrate"];
++        if (payloadNode.attributes["channels"])
++          payload += "/" + payloadNode.attributes["channels"];
++        section.push(payload);
+ 
+         // Push payload-type ID to media.
+-        media.push(pNode.attributes["id"]);
++        medium += " " + payloadNode.attributes["id"];
+ 
+-        nodeContent.push(payload);
+-        indexSendrecv = nodeContent.lastIndexOf(payload);
+-
+-        if (pNode.getElement(["parameter"])) {
+-          let parameter = pNode.getElement(["parameter"]);
+-
++        let parameter = payloadNode.getElement(["parameter"])
++        if (parameter) {
+           // Ping element.
+-          if (parameter.attributes["ptime"]) {
+-            nodeContent.push("a=ptime:" + parameter.attributes["ptime"]);
+-            indexSendrecv = nodeContent.length;
+-          }
++          if (parameter.attributes["ptime"])
++            section.push("a=ptime:" + parameter.attributes["ptime"]);
+           // Additional parameter to be added if specified.
+           else if (parameter.attributes["value"]) {
+-            nodeContent.push("a=fmtp:" + pNode.attributes["id"] + " " +
+-                             parameter.attributes["value"]);
+-            indexSendrecv = nodeContent.length;
++            section.push("a=fmtp:" + payloadNode.attributes["id"] + " " +
++                         parameter.attributes["value"]);
+           }
+         }
+ 
+         /* rtcp-fb element defined in XEP: 2093 Jingle RTP Feedback Negotiation
+          * uses a modified  RTP profile for audio and video conferences with
+          * minimal control to acieve timely feedback.
+          */
+-        let rtcpfbData = pNode.getElements(["rtcp-fb"]);
+-        if (rtcpfbData) {
+-          for (let rNode of rtcpfbData) {
+-            let rtcpfb = "a=rtcp-fb:" + pNode.attributes["id"] + " " +
+-                         rNode.attributes["type"];
++        let rtcpFbData = payloadNode.getElements(["rtcp-fb"]);
++        if (rtcpFbData) {
++          for (let rNode of rtcpFbData) {
++            let rtcpFb = "a=rtcp-fb:" + payloadNode.attributes["id"] + " " +
++              rNode.attributes["type"];
+             if (rNode.attributes["subtype"])
+-              rtcpfb += " " + rNode.attributes["subtype"];
++              rtcpFb += " " + rNode.attributes["subtype"];
+ 
+-            nodeContent.push(rtcpfb);
++            section.push(rtcpFb);
+           }
+         }
+       }
+-      // Push a=sendrecv just after the last payload type element.
+-      nodeContent.splice(indexSendrecv + 1, 0, "a=sendrecv");
+ 
+       // rtp-hdrext element.
+       // e.g. [a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level].
+       let rtpContent = descData.getElement(["rtp-hdrext"]);
+-
+       if (rtpContent) {
+-        let rtphdrext = "a=extmap:" + rtpContent.attributes["id"]  + " " +
++        let rtpHdrext = "a=extmap:" + rtpContent.attributes["id"]  + " " +
+                         rtpContent.attributes["uri"];
+-
+-        nodeContent.push(rtphdrext);
++        section.push(rtpHdrext);
+       }
+ 
+       // Setup attribute of description [a=setup:actpass].
+       if (descData.attributes["setup"])
+-        nodeContent.push("a=setup:" + descData.attributes["setup"]);
++        section.push("a=setup:" + descData.attributes["setup"]);
+ 
+       // Candidate elements.
+       // e.g. [a=candidate:0 1 UDP 2122252543 106.51.45.18 60055 typ host].
+-      let candidateData = cNode.getElement(["transport"])
+-                               .getElements(["candidate"]);
+-      let relport = [];
+-
++      let candidateData = transport.getElements(["candidate"]);
+       for (let candNode of candidateData) {
+-        let candidate = "a=candidate:" + candNode.attributes["component"] + " " +
++        let candidate = "a=candidate:" +
++                        candNode.attributes["component"] + " " +
+                         candNode.attributes["foundation"] + " " +
+                         candNode.attributes["protocol"] + " " +
+                         candNode.attributes["priority"] + " " +
+                         candNode.attributes["ip"] + " " +
+                         candNode.attributes["port"] +
+                         " typ " + candNode.attributes["type"];
+         if (candNode.attributes["relport"]) {
+           candidate += " raddr " + candNode.attributes["reladdr"] +
+                        " rport " + candNode.attributes["relport"];
+-          // Store the values of relport so that if relport exist the
+-          // media[1] could be replaced with relport[0].
+-          relport.push(candNode.attributes["relport"]);
+         }
+ 
+-        if (relport[0])
+-          media[1] = relport[0];
+-
+-        nodeContent.push(candidate);
++        section.push(candidate);
+       }
+ 
+-      // This is used to construct the m=… line of the SDP offer. It puts the
+-      // media line constructed just above the c=… line.
+-      nodeContent.splice(indexConnection, 0, media.join(" "));
++      // Add the media element as the first part of this section.
++      section.unshift(medium);
+       // Taking [a=rtcp-mux] as default. Suitable XML element is not defined.
+       // Most of the devices have rtcp-mux in their offer.
+-      nodeContent.push("a=rtcp-mux");
++      section.push("a=rtcp-mux");
++
++      // Add this section to the full SDP.
++      sdp.push(...section);
+     }
+ 
+-    sdp.push(nodeContent.join("\r\n"));
+     return sdp.join("\r\n");
+   }
+ };
