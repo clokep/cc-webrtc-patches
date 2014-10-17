@@ -4,7 +4,7 @@
 diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jingle.jsm
 --- a/chat/protocols/xmpp/xmpp-jingle.jsm
 +++ b/chat/protocols/xmpp/xmpp-jingle.jsm
-@@ -3,214 +3,155 @@
+@@ -3,214 +3,162 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  const EXPORTED_SYMBOLS = ["Jingle"];
@@ -166,18 +166,6 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -        let params = mediaField.split(" ");
 -        let pNode = params[0].split(":");
 +      for (let line of lines) {
-+        if (line.startsWith("a=extmap")) {
-+          // XEP: 0294 Jingle RTP Header Extensions Negotiation.
-+          // e.g. [ a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level].
-+          let [id, uri] = line.slice(line.indexOf(":") + 1).split(" ");
-+          description.addChild(Stanza.node("rtp-hdrext", null,
-+                                           {xmlns: Stanza.NS.jingle_apps_rtp_hdrext,
-+                                            id: id, uri: uri}));
-+        }
-+        else if (line.startsWith("a=rtpmap")) {
-+          // e.g. [a=rtpmap:8 PCMA/8000/2]
-+          let [id, value] = line.slice(line.indexOf(":") + 1).split(" ");
-+          let values = value.split("/");
  
 -        /* XEP: 2094 Jingle RTP Header Extensions Negotiation. It defines
 -         * backward-compatible and extensible means to carry multiple header
@@ -193,13 +181,17 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -                                  {xmlns: Stanza.NS.jingle_apps_rtp_hdrext,
 -                                   id: pNode[1],
 -                                   uri: params[1]}));
-+          let attr = {id: id, name: values[0], clockrate: values[1]};
-+          // channel information is optional.
-+          if (values.length >= 3)
-+            attr.channels = values[2];
++        // parseParams will return an array of the space-separated
++        // parameters after the ':' on the line variable.
++        let parseParams = () => line.slice(line.indexOf(":") + 1).split(" ");
 +
-+          lastPayload = Stanza.node("payload-type", null, attr);
-+          description.addChild(lastPayload);
++        if (line.startsWith("a=extmap")) {
++          // XEP: 0294 Jingle RTP Header Extensions Negotiation.
++          // e.g. [ a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level].
++          let [id, uri] = parseParams();
++          description.addChild(Stanza.node("rtp-hdrext", null,
++                                           {xmlns: Stanza.NS.jingle_apps_rtp_hdrext,
++                                            id: id, uri: uri}));
          }
 -        /* Payload-type node is child of description node. This attribute
 -         * maps from an RTP payload type number (as used in an "m=" line)
@@ -214,32 +206,19 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -                      clockrate: payloadAttr[1]};
 -          if (payloadAttr.length >= 3)
 -            attr.channels = payloadAttr[2];
-+        else if (line.startsWith("a=ptime")) {
-+          // This gives the length of time in milliseconds represented by the
-+          // media in a packet. It applies to the payload node created before.
-+          lastPayload.addChild(Stanza.node("parameter", null,
-+                                           {ptime: line.slice(line.indexOf(":") + 1)}));
-+        }
-+        else if (line.startsWith("a=fmtp")) {
-+          // a=fmtp field allows parameters that are specific to a particular
-+          // format to be conveyed in a way that SDP does not have to understand
-+          // them. This is added in same manner as a=ptime.
-+          lastPayload.addChild(Stanza.node("parameter", null,
-+                                           {value: line.slice(line.indexOf(" ") + 1)}));
-+        }
-+        else if (line.startsWith("a=rtcp-fb")) {
-+          // XEP: 0293 Jingle RTP Feedback Negotiation.
-+          // e.g. [a=rtcp-fb:98 nack rpsi]
-+          let values = line.slice(line.indexOf(":") + 1).split(" ");
++        else if (line.startsWith("a=rtpmap")) {
++          // e.g. [a=rtpmap:8 PCMA/8000/2]
++          let [id, value] = parseParams();
++          let values = value.split("/");
  
 -          payloads.push(Stanza.node("payload-type", null, attr));
-+          // TODO: values[0] is the id of the rtpmap this applies to;
-+          // we currently just assume the rtpmap is the previous payload.
-+          let attr = {xmlns: Stanza.NS.jingle_apps_rtcp_fb, type: values[1]};
++          let attr = {id: id, name: values[0], clockrate: values[1]};
++          // channel information is optional.
 +          if (values.length >= 3)
-+            attr.subtype = values[2];
++            attr.channels = values[2];
 +
-+          lastPayload.addChild(Stanza.node("rtcp-fb", null, attr));
++          lastPayload = Stanza.node("payload-type", null, attr);
++          description.addChild(lastPayload);
          }
 -        /* The ping time information if present should be added as the child
 -         * of payload-type. This gives the length of time in milliseconds
@@ -251,7 +230,12 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -          let parameter = Stanza.node("parameter", null,
 -                                      {ptime: pNode[1]});
 -          payloads[payloads.length - 1].addChild(parameter);
--        }
++        else if (line.startsWith("a=ptime")) {
++          // This gives the length of time in milliseconds represented by the
++          // media in a packet. It applies to the payload node created before.
++          lastPayload.addChild(Stanza.node("parameter", null,
++                                           {ptime: parseParams()[0]}));
+         }
 -        /* a=fmtp field allows parameters that are specific to a particular
 -         * format to be conveyed in a way that SDP does not have to understand
 -         * them. This is added in same manner as a=ptime.
@@ -260,7 +244,15 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -          let parameter = Stanza.node("parameter", null,
 -                                      {value: params[1]});
 -          payloads[payloads.length - 1].addChild(parameter);
--        }
++        else if (line.startsWith("a=fmtp")) {
++          // a=fmtp field allows parameters that are specific to a particular
++          // format to be conveyed in a way that SDP does not have to understand
++          // them. This is added in same manner as a=ptime.
++          // TODO parameter 1 is the id of the rtpmap this applies too;
++          // we currently just assume the rtpmap is the previous payload.
++          lastPayload.addChild(Stanza.node("parameter", null,
++                                           {value: parseParams()[1]}));
+         }
 -        /* XEP: 2093 Jingle RTP Feedback Negotiation. It is uses a modified
 -         * RTP profile for audio and video conferences with minimal control
 -         * to acieve timely feedback.
@@ -272,10 +264,21 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -          let attr = {xmlns: Stanza.NS.jingle_apps_rtcp_fb, type: params[1]};
 -          if (params.length >= 3)
 -            attr.subtype = params[2];
--
++        else if (line.startsWith("a=rtcp-fb")) {
++          // XEP: 0293 Jingle RTP Feedback Negotiation.
++          // e.g. [a=rtcp-fb:98 nack rpsi]
++          let values = parseParams();
+ 
 -          payloads[payloads.length - 1]
 -            .addChild(Stanza.node("rtcp-fb", null, attr));
--        }
++          // TODO: values[0] is the id of the rtpmap this applies to;
++          // we currently just assume the rtpmap is the previous payload.
++          let attr = {xmlns: Stanza.NS.jingle_apps_rtcp_fb, type: values[1]};
++          if (values.length >= 3)
++            attr.subtype = values[2];
++
++          lastPayload.addChild(Stanza.node("rtcp-fb", null, attr));
+         }
 -        /* Candidate nodes are added as child of the transport node. It is
 -         * explained in RFC-5245: Interactive Connectivity Establishment(ICE).
 -         * e.g. [a=candidate:3 2 UDP 1686044670 106.51.45.18 43127 typ host]
@@ -289,7 +292,7 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -            attr.relport = params[11];
 +        else if (line.startsWith("a=candidate")) {
 +          // e.g. [a=candidate:3 2 UDP 1686044670 106.51.45.18 43127 typ host]
-+          let values = line.slice(line.indexOf(":") + 1).split(" ");
++          let values = parseParams();
 +          let attr = {component: values[0], foundation: values[1],
 +                      protocol: values[2], priority: values[3], ip: values[4],
 +                      port: values[5], type: values[7]};
@@ -312,7 +315,7 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
  
    xml2sdp: function xml2sdp(aXmlOffer) {
      if (aXmlOffer.length === 0)
-@@ -242,19 +183,23 @@
+@@ -242,19 +190,23 @@
                 eleFingerprint.innerText);
      }
  
