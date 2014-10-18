@@ -7,7 +7,7 @@ Clean up xml2sdp.
 diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jingle.jsm
 --- a/chat/protocols/xmpp/xmpp-jingle.jsm
 +++ b/chat/protocols/xmpp/xmpp-jingle.jsm
-@@ -3,379 +3,307 @@
+@@ -3,379 +3,318 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  const EXPORTED_SYMBOLS = ["Jingle"];
@@ -394,21 +394,32 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 +      let transport = content.getElement(["transport"]);
 +      if (!transport)
 +        continue;
-+
-+      let firstCandidate = transport.getElement(["candidate"]);
  
-       // The port attribute of first candidate is used if no relport exist. Else
-       // use the first relport found in other candidate of the media.
+-      // The port attribute of first candidate is used if no relport exist. Else
+-      // use the first relport found in other candidate of the media.
 -      media.push(firstCandidateData.attributes["port"], "RTP/SAVPF");
-+      // FIXME implementation doesn't match comment here :-(.
-+      media += " " + firstCandidate.attributes["port"] + " RTP/SAVPF";
++      let candidates = transport.getElements(["candidate"]);
++      // The media line contains the real port, if we can find one.
++      let port;
++      for (let candidate of candidates) {
++        if (candidate.attributes["relport"]) {
++          port = candidate.attributes["relport"];
++          break;
++        }
++      }
++      // The port of the first candidate is used if no relport exists.
++      if (!port)
++        port = candidates[0].attributes["port"];
  
 -      let connection = "c=IN ";
 -      let IP = firstCandidateData.attributes["ip"];
 -      if (IP.contains(":"))
 -        connection += "IP6 " + IP;
++      media += " " + port + " RTP/SAVPF";
++
 +      let connection = "c=IN IP";
-+      let ip = firstCandidate.attributes["ip"];
++      // XXX Using the ip from the first candidate doesn't seem perfect...
++      let ip = candidates[0].attributes["ip"];
 +      if (ip.contains(":"))
 +        connection += "6 " + ip;
        else
@@ -490,8 +501,10 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 +          section.push(rtcpFb);
          }
        }
--      // Push a=sendrecv just after the last payload type element.
++
+       // Push a=sendrecv just after the last payload type element.
 -      nodeContent.splice(indexSendrecv + 1, 0, "a=sendrecv");
++      section.push("a=sendrecv");
  
        // rtp-hdrext element.
        // e.g. [a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level].
@@ -533,7 +546,6 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -          // Store the values of relport so that if relport exist the
 -          // media[1] could be replaced with relport[0].
 -          relport.push(candNode.attributes["relport"]);
-+      let candidates = transport.getElements(["candidate"]);
 +      for (let node of candidates) {
 +        let candidate = "a=candidate:" +
 +                        node.attributes["component"] + " " +
