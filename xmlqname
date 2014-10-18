@@ -1,0 +1,49 @@
+# HG changeset patch
+# Parent 700acbaba3041f4a11625f5a92d179bb300c05d3
+# User aleth <aleth@instantbird.org>
+qname missing bug
+
+diff --git a/chat/protocols/xmpp/xmpp-xml.jsm b/chat/protocols/xmpp/xmpp-xml.jsm
+--- a/chat/protocols/xmpp/xmpp-xml.jsm
++++ b/chat/protocols/xmpp/xmpp-xml.jsm
+@@ -172,16 +172,19 @@ TextNode.prototype = {
+ };
+ 
+ /* XML node */
+ function XMLNode(aParentNode, aUri, aLocalName, aQName, aAttr) {
+   this._parentNode = aParentNode; // Used only for parsing
+   this.uri = aUri;
+   this.localName = aLocalName;
+   this.qName = aQName;
++  if (!aQName) {
++    Cu.reportError("Trying to create node without qName: "+aUri + ":"+ aLocalName+"\n");
++  }
+   this.attributes = {};
+   this.children = [];
+ 
+   if (aAttr) {
+     for (let i = 0; i < aAttr.length; ++i)
+       this.attributes[aAttr.getQName(i)] = aAttr.getValue(i);
+   }
+ }
+@@ -208,16 +211,20 @@ XMLNode.prototype = {
+ 
+   /* Get the first element inside the node that matches a query. */
+   getElement: function(aQuery) {
+     if (aQuery.length == 0)
+       return this;
+ 
+     let nq = aQuery.slice(1);
+     for each (let child in this.children) {
++      if (!("qName" in child)) {
++        Cu.reportError("no qName in child");
++        continue;
++      }
+       if (child.qName != aQuery[0])
+         continue;
+       let n = child.getElement(nq);
+       if (n)
+         return n;
+     }
+ 
+     return null;
