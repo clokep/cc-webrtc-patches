@@ -8,7 +8,7 @@ Bug 1018060: Implement voice call support in Instantbird using webRTC.
 diff --git a/chat/components/public/prplIConversation.idl b/chat/components/public/prplIConversation.idl
 --- a/chat/components/public/prplIConversation.idl
 +++ b/chat/components/public/prplIConversation.idl
-@@ -69,18 +69,28 @@ interface prplIConversation: nsISupports
+@@ -69,18 +69,26 @@ interface prplIConversation: nsISupports
    /* Method to add or remove an observer */
    void addObserver(in nsIObserver aObserver);
    void removeObserver(in nsIObserver aObserver);
@@ -21,11 +21,9 @@ diff --git a/chat/components/public/prplIConversation.idl b/chat/components/publ
 +[scriptable, uuid(c3a50563-9090-413f-933f-441e9615f585)]
  interface prplIConvIM: prplIConversation {
 +  /* Send a SDP offer when user makes a call.
-+   * TODO Pass the mozRTCSessionDescription directly, but this is in webidl.*/
 +  void initiateCall(in AUTF8String aOffer);
 +
 +  /* Send a SDP answer when a user accepts an incoming video call.
-+   * TODO Pass the mozRTCSessionDescription directly, but this is in webidl. */
 +  void acceptCall(in AUTF8String aAnswer);
 +
 +  /* Terminate a video call */
