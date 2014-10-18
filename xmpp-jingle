@@ -1,13 +1,13 @@
 # HG changeset patch
 # Date 1413517017 14400
 # User Patrick Cloke <clokep@gmail.com>
-# Parent d0dc76016c044fef004717ad3410503655eeabbd
+# Parent 5b003759bded6110b39348f04276c878f5f7591a
 Clean up xml2sdp.
 
 diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jingle.jsm
 --- a/chat/protocols/xmpp/xmpp-jingle.jsm
 +++ b/chat/protocols/xmpp/xmpp-jingle.jsm
-@@ -3,379 +3,308 @@
+@@ -3,379 +3,307 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  const EXPORTED_SYMBOLS = ["Jingle"];
@@ -316,10 +316,11 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
      return contentNodes;
    },
  
-   xml2sdp: function xml2sdp(aXmlOffer) {
+-  xml2sdp: function xml2sdp(aXmlOffer) {
 -    if (aXmlOffer.length === 0)
 -      return;
-+    if (!aXmlOffer.length)
++  xml2sdp: function xml2sdp(aJingleContentNodes) {
++    if (!aJingleContentNodes.length)
 +      return null;
  
 -    let sdp = [];
@@ -343,47 +344,54 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 +               "t=0 0"];
  
      // Transport node contains ufrag, pwd, fingerprint.
-     let eleTransport = aXmlOffer[0].getElement(["transport"]);
+-    let eleTransport = aXmlOffer[0].getElement(["transport"]);
 -    let eleFingerprint = eleTransport.getElement(["fingerprint"]);
-+    if (!eleTransport)
++    let transport = aJingleContentNodes[0].getElement(["transport"]);
++    if (!transport)
 +      return null;
  
-     sdp.push("a=ice-ufrag:" + eleTransport.attributes["ufrag"]);
-     sdp.push("a=ice-pwd:" + eleTransport.attributes["pwd"]);
+-    sdp.push("a=ice-ufrag:" + eleTransport.attributes["ufrag"]);
+-    sdp.push("a=ice-pwd:" + eleTransport.attributes["pwd"]);
++    sdp.push("a=ice-ufrag:" + transport.attributes["ufrag"]);
++    sdp.push("a=ice-pwd:" + transport.attributes["pwd"]);
  
-+    let eleFingerprint = eleTransport.getElement(["fingerprint"]);
-+    // TODO Is fingerprint required?
-     if (eleFingerprint) {
-       sdp.push("a=fingerprint:" + eleFingerprint.attributes["hash"]  + " " +
-                eleFingerprint.innerText);
+-    if (eleFingerprint) {
+-      sdp.push("a=fingerprint:" + eleFingerprint.attributes["hash"]  + " " +
+-               eleFingerprint.innerText);
++    let fingerprint = transport.getElement(["fingerprint"]);
++    if (fingerprint) {
++      // XXX Should we warn if fingerprint is missing?
++      sdp.push("a=fingerprint:" + fingerprint.attributes["hash"]  + " " +
++               fingerprint.innerText);
      }
  
 -    /* The content node is used to form the media element of the offer.
 -     * i.e. It contains m=, c=, a=rtpmap, a=candidate and other atrributes
 -     * which defines how that media voice/video would be mapped.
 -     */
+-    for (let cNode of aXmlOffer) {
+-      let media = [];
 +    // The content node is used to form the media element of the offer. I.e. it
 +    // contains m=, c=, a=rtpmap, a=candidate and other attributes which define
 +    // how that media voice/video are mapped.
-     for (let cNode of aXmlOffer) {
--      let media = [];
-+      if (cNode.qName != "content")
++    for (let content of aJingleContentNodes) {
++      if (content.qName != "content")
 +        continue;
 +
-+      let descData = cNode.getElement(["description"]);
-+      if (!descData)
++      let description = content.getElement(["description"]);
++      if (!description)
 +        continue;
 +
        // Media is of the form [m=video 33680 RTP/SAVPF 120].
 -      let descData = cNode.getElement(["description"]);
 -      media.push(("m=" + descData.attributes["media"]));
-+      let medium = "m=" + descData.attributes["media"];
++      let media = "m=" + description.attributes["media"];
  
        // Connection element (IP is first IP of candidate).
        // e.g. [c=IN IP4 106.51.45.18]
 -      let firstCandidateData = cNode.getElement(["transport"])
 -                                    .getElement(["candidate"]);
-+      let transport = cNode.getElement(["transport"]);
++      let transport = content.getElement(["transport"]);
 +      if (!transport)
 +        continue;
 +
@@ -392,7 +400,8 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
        // The port attribute of first candidate is used if no relport exist. Else
        // use the first relport found in other candidate of the media.
 -      media.push(firstCandidateData.attributes["port"], "RTP/SAVPF");
-+      medium += " " + firstCandidate.attributes["port"] + " RTP/SAVPF";
++      // FIXME implementation doesn't match comment here :-(.
++      media += " " + firstCandidate.attributes["port"] + " RTP/SAVPF";
  
 -      let connection = "c=IN ";
 -      let IP = firstCandidateData.attributes["ip"];
@@ -415,13 +424,13 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
        // Payload element [a=rtpmap:8 PCMA/8000].
 -      let payloadData = descData.getElements(["payload-type"]);
 -      let payload;
-+      let payloadNodes = descData.getElements(["payload-type"]);
-       let indexSendrecv;
+-      let indexSendrecv;
 -      for (let pNode of payloadData) {
 -        payload = "a=rtpmap:" + pNode.attributes["id"] + " " +
 -                  pNode.attributes["name"] + "/" + pNode.attributes["clockrate"];
 -        if (pNode.attributes["channels"])
 -          payload += "/" + pNode.attributes["channels"];
++      let payloadNodes = description.getElements(["payload-type"]);
 +      for (let payloadNode of payloadNodes) {
 +        let payload = "a=rtpmap:" + payloadNode.attributes["id"] + " " +
 +          payloadNode.attributes["name"] + "/" + payloadNode.attributes["clockrate"];
@@ -431,7 +440,7 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
  
          // Push payload-type ID to media.
 -        media.push(pNode.attributes["id"]);
-+        medium += " " + payloadNode.attributes["id"];
++        media += " " + payloadNode.attributes["id"];
  
 -        nodeContent.push(payload);
 -        indexSendrecv = nodeContent.lastIndexOf(payload);
@@ -467,18 +476,18 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -          for (let rNode of rtcpfbData) {
 -            let rtcpfb = "a=rtcp-fb:" + pNode.attributes["id"] + " " +
 -                         rNode.attributes["type"];
-+        let rtcpFbData = payloadNode.getElements(["rtcp-fb"]);
-+        if (rtcpFbData) {
-+          for (let rNode of rtcpFbData) {
-+            let rtcpFb = "a=rtcp-fb:" + payloadNode.attributes["id"] + " " +
-+              rNode.attributes["type"];
-             if (rNode.attributes["subtype"])
+-            if (rNode.attributes["subtype"])
 -              rtcpfb += " " + rNode.attributes["subtype"];
-+              rtcpFb += " " + rNode.attributes["subtype"];
++        let rtcpFbData = payloadNode.getElements(["rtcp-fb"]);
++        for (let rNode of rtcpFbData) {
++          let rtcpFb = "a=rtcp-fb:" + payloadNode.attributes["id"] + " " +
++            rNode.attributes["type"];
++          if (rNode.attributes["subtype"])
++            rtcpFb += " " + rNode.attributes["subtype"];
  
 -            nodeContent.push(rtcpfb);
-+            section.push(rtcpFb);
-           }
+-          }
++          section.push(rtcpFb);
          }
        }
 -      // Push a=sendrecv just after the last payload type element.
@@ -486,8 +495,9 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
  
        // rtp-hdrext element.
        // e.g. [a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level].
-       let rtpContent = descData.getElement(["rtp-hdrext"]);
+-      let rtpContent = descData.getElement(["rtp-hdrext"]);
 -
++      let rtpContent = description.getElement(["rtp-hdrext"]);
        if (rtpContent) {
 -        let rtphdrext = "a=extmap:" + rtpContent.attributes["id"]  + " " +
 +        let rtpHdrext = "a=extmap:" + rtpContent.attributes["id"]  + " " +
@@ -498,9 +508,10 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
        }
  
        // Setup attribute of description [a=setup:actpass].
-       if (descData.attributes["setup"])
+-      if (descData.attributes["setup"])
 -        nodeContent.push("a=setup:" + descData.attributes["setup"]);
-+        section.push("a=setup:" + descData.attributes["setup"]);
++      if (description.attributes["setup"])
++        section.push("a=setup:" + description.attributes["setup"]);
  
        // Candidate elements.
        // e.g. [a=candidate:0 1 UDP 2122252543 106.51.45.18 60055 typ host].
@@ -508,23 +519,33 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -                               .getElements(["candidate"]);
 -      let relport = [];
 -
-+      let candidateData = transport.getElements(["candidate"]);
-       for (let candNode of candidateData) {
+-      for (let candNode of candidateData) {
 -        let candidate = "a=candidate:" + candNode.attributes["component"] + " " +
-+        let candidate = "a=candidate:" +
-+                        candNode.attributes["component"] + " " +
-                         candNode.attributes["foundation"] + " " +
-                         candNode.attributes["protocol"] + " " +
-                         candNode.attributes["priority"] + " " +
-                         candNode.attributes["ip"] + " " +
-                         candNode.attributes["port"] +
-                         " typ " + candNode.attributes["type"];
-         if (candNode.attributes["relport"]) {
-           candidate += " raddr " + candNode.attributes["reladdr"] +
-                        " rport " + candNode.attributes["relport"];
+-                        candNode.attributes["foundation"] + " " +
+-                        candNode.attributes["protocol"] + " " +
+-                        candNode.attributes["priority"] + " " +
+-                        candNode.attributes["ip"] + " " +
+-                        candNode.attributes["port"] +
+-                        " typ " + candNode.attributes["type"];
+-        if (candNode.attributes["relport"]) {
+-          candidate += " raddr " + candNode.attributes["reladdr"] +
+-                       " rport " + candNode.attributes["relport"];
 -          // Store the values of relport so that if relport exist the
 -          // media[1] could be replaced with relport[0].
 -          relport.push(candNode.attributes["relport"]);
++      let candidates = transport.getElements(["candidate"]);
++      for (let node of candidates) {
++        let candidate = "a=candidate:" +
++                        node.attributes["component"] + " " +
++                        node.attributes["foundation"] + " " +
++                        node.attributes["protocol"] + " " +
++                        node.attributes["priority"] + " " +
++                        node.attributes["ip"] + " " +
++                        node.attributes["port"] +
++                        " typ " + node.attributes["type"];
++        if (node.attributes["relport"]) {
++          candidate += " raddr " + node.attributes["reladdr"] +
++                       " rport " + node.attributes["relport"];
          }
  
 -        if (relport[0])
@@ -538,7 +559,8 @@ diff --git a/chat/protocols/xmpp/xmpp-jingle.jsm b/chat/protocols/xmpp/xmpp-jing
 -      // media line constructed just above the c=… line.
 -      nodeContent.splice(indexConnection, 0, media.join(" "));
 +      // Add the media element as the first part of this section.
-+      section.unshift(medium);
++      section.unshift(media);
++
        // Taking [a=rtcp-mux] as default. Suitable XML element is not defined.
        // Most of the devices have rtcp-mux in their offer.
 -      nodeContent.push("a=rtcp-mux");
